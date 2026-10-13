@@ -14,6 +14,18 @@ Application mobile inspirée de **Superbuy** et **CSSBuy** : on y cherche ou col
 
 > ⚠️ Par défaut, l'application tourne sur un **catalogue de démonstration** (produits, prix et vendeurs fictifs), signalé par un bandeau jaune. Pour afficher les vrais articles, il faut une clé chez un fournisseur de données (voir [Données réelles](#données-réelles)).
 
+## Tester l'APK Android
+
+**Téléchargement direct (sans compte GitHub) : <https://github.com/roysti/Roysti/releases/latest/download/Roysti.apk>** – toutes les versions : <https://github.com/roysti/Roysti/releases>
+
+1. Ouvrez le lien sur le téléphone Android et téléchargez `Roysti.apk`.
+2. Ouvrez le fichier ; si Android le demande, autorisez « Installer des applications inconnues » pour votre navigateur.
+3. Lancez Roysti, puis **Compte → Se connecter → « Utiliser le compte démo »**.
+
+L'APK fonctionne **seul, sans serveur** : la logique du backend est embarquée dans l'application (mode « intégré »), avec le catalogue de démonstration et vos données (compte, commandes, colis) enregistrées sur le téléphone. **Compte → Réglages** permet de basculer vers un serveur Roysti distant ou de réinitialiser les données.
+
+L'APK est compilé automatiquement par GitHub Actions ([`.github/workflows/android-apk.yml`](.github/workflows/android-apk.yml)) à chaque modification de `mobile/` ou `backend/src/`. C'est un build de test signé avec la clé de debug d'Expo, pour téléphones ARM (arm64-v8a, armeabi-v7a), Android 7.0 ou plus récent ; une publication sur le Play Store demandera une clé de signature dédiée.
+
 ## Fonctionnalités
 
 **Trouver un article**
@@ -34,7 +46,7 @@ Application mobile inspirée de **Superbuy** et **CSSBuy** : on y cherche ou col
 
 **Compte** : portefeuille et recharges, adresses, coupons, favoris, notifications, devise d'affichage (EUR, USD, MGA, XOF, CAD…).
 
-## Démarrage rapide
+## Démarrage rapide (développement)
 
 Prérequis : Node.js 20 ou plus récent.
 
@@ -52,7 +64,7 @@ npx expo start          # puis scanner le QR code avec Expo Go, ou touche « w �
 
 Compte de démonstration : **demo@roysti.app / demo1234** (bouton « Utiliser le compte démo » sur l'écran de connexion).
 
-Sur un téléphone, l'application trouve l'API automatiquement à l'adresse IP de l'ordinateur qui fait tourner Expo (port 4000). Sinon, définissez `EXPO_PUBLIC_API_URL` (ex. `http://192.168.1.20:4000/api`) ou changez l'adresse dans **Compte → Réglages**.
+Par défaut, l'application utilise l'**API intégrée** : elle fonctionne sans démarrer le backend. Pour utiliser le serveur à la place, choisissez « Serveur Roysti » dans **Compte → Réglages** (l'adresse par défaut est l'IP de l'ordinateur qui fait tourner Expo, port 4000), ou compilez avec `EXPO_PUBLIC_API_URL` (ex. `http://192.168.1.20:4000/api`), ce qui active le mode serveur.
 
 En mode démo, le bouton **« Démo : simuler l'étape suivante »** sur une commande ou un colis joue le rôle de l'équipe d'achat et de l'entrepôt (achat, réception avec photos, emballage, pesée, expédition).
 
@@ -103,14 +115,22 @@ D'autres fournisseurs (TMAPI, OTCommerce/OTAPI, API officielle Taobao Open Platf
 
 Les prix sont toujours recalculés côté serveur à partir du fournisseur : le prix envoyé par l'application est ignoré.
 
+### Architecture partagée
+
+La table des routes et l'aiguillage vivent dans [`backend/src/core/api.ts`](backend/src/core/api.ts), sans dépendance à Express ni à Node :
+
+- le serveur ([`backend/src/app.ts`](backend/src/app.ts)) n'est qu'un adaptateur HTTP autour de ce cœur ;
+- l'application mobile exécute le même cœur directement dans Hermes ([`mobile/src/lib/local-api.ts`](mobile/src/lib/local-api.ts)). Metro l'embarque grâce à [`mobile/metro.config.js`](mobile/metro.config.js) ;
+- les services propres à la plateforme sont injectés : crypto (`node:crypto` côté serveur, `expo-crypto` + `@noble/hashes` dans l'app) et persistance (fichier JSON ou AsyncStorage). Un test vérifie que le cœur n'importe aucun module Node.
+
 ## Tests et vérifications
 
 ```bash
-cd backend && npm test && npm run typecheck   # 40 tests : liens, frais, port, parcours complet
+cd backend && npm test && npm run typecheck   # 47 tests : liens, frais, port, parcours complet, cœur portable
 cd mobile && npx tsc --noEmit && npx expo lint
 ```
 
-Le parcours complet (recherche → fiche → panier → paiement → entrepôt → colis → expédition) a aussi été joué dans Chromium sur la version web de l'application.
+Le parcours complet (recherche → fiche → panier → paiement → entrepôt → colis → expédition) a aussi été joué dans Chromium sur la version web de l'application, en mode intégré, sans serveur. Le bundle Android est compilé en bytecode Hermes à chaque build.
 
 ## Avant une mise en production
 

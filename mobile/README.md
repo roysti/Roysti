@@ -9,8 +9,9 @@ npx tsc --noEmit      # vérification des types
 npx expo lint         # lint
 ```
 
-- `EXPO_PUBLIC_API_URL` : adresse de l'API (par défaut, IP de la machine qui sert Metro, port 4000).
-- Builds de production : `npx eas-cli@latest build` (voir la documentation EAS).
+- Par défaut, l'API est **intégrée** (`src/lib/local-api.ts`) : l'app exécute la logique de `../backend/src/core` sans serveur. `metro.config.js` embarque ce dossier.
+- `EXPO_PUBLIC_API_URL` : adresse d'un serveur Roysti ; si elle est définie au build, l'app démarre en mode serveur (sinon, bascule dans Réglages).
+- APK de test : compilé par GitHub Actions (`.github/workflows/android-apk.yml`), voir le [README principal](../README.md#tester-lapk-android). Pour un build local : `npx expo prebuild --platform android` puis `cd android && ./gradlew assembleRelease` (SDK Android, NDK 27.1 et JDK 17 requis).
 
 ## Structure
 
