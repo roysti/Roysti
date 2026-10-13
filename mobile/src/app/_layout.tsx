@@ -38,6 +38,8 @@ export default function RootLayout() {
             <Stack.Screen name="product/[platform]/[itemId]" options={{ title: 'Article' }} />
             <Stack.Screen name="link" options={{ title: 'Coller un lien', presentation: 'modal' }} />
             <Stack.Screen name="login" options={{ title: 'Connexion', presentation: 'modal' }} />
+            <Stack.Screen name="otp" options={{ title: 'Code', presentation: 'modal' }} />
+            <Stack.Screen name="profile" options={{ title: 'Profil et sécurité' }} />
             <Stack.Screen name="checkout" options={{ title: 'Confirmer la commande' }} />
             <Stack.Screen name="orders/index" options={{ title: 'Mes commandes' }} />
             <Stack.Screen name="orders/[id]" options={{ title: 'Commande' }} />

@@ -11,6 +11,8 @@ export interface Runtime {
   hashPassword(password: string, salt: string): string;
   /** Comparaison de deux chaînes hexadécimales en temps constant. */
   safeEqual(a: string, b: string): boolean;
+  /** SHA-256 (hexadécimal) d'une chaîne UTF-8 : empreinte rapide des codes à usage unique. */
+  sha256Hex(text: string): string;
 }
 
 /** Comparaison en temps constant, utilisable par les implémentations sans node:crypto. */

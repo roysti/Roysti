@@ -4,6 +4,7 @@ import { config } from './config.js';
 import { createCore } from './core/api.js';
 import { nodeRuntime } from './core/nodeRuntime.js';
 import type { Runtime } from './core/runtime.js';
+import { createSenders, type Senders } from './messaging/index.js';
 import { createProvider } from './providers/index.js';
 import type { ProductProvider } from './providers/types.js';
 import { Store } from './store/db.js';
@@ -15,6 +16,7 @@ export interface AppOptions {
   runtime?: Runtime;
   demoMode?: boolean;
   seed?: boolean;
+  senders?: Senders;
 }
 
 function bearerToken(req: Request): string | undefined {
@@ -32,6 +34,8 @@ export function createApp(options: AppOptions = {}) {
     runtime,
     demoMode: options.demoMode ?? config.demoMode,
     seed: options.seed,
+    // SMS/e-mail réels si configurés (SMS_PROVIDER, EMAIL_PROVIDER), sinon démonstration.
+    senders: options.senders ?? createSenders(),
   });
 
   const app = express();

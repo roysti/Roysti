@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import type { Runtime } from './runtime.js';
 
 export const nodeRuntime: Runtime = {
@@ -10,4 +10,5 @@ export const nodeRuntime: Runtime = {
     const right = Buffer.from(b, 'hex');
     return left.length === right.length && timingSafeEqual(left, right);
   },
+  sha256Hex: (text) => createHash('sha256').update(text, 'utf8').digest('hex'),
 };

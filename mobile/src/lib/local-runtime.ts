@@ -1,6 +1,6 @@
 import { pbkdf2 } from '@noble/hashes/pbkdf2.js';
 import { sha256 } from '@noble/hashes/sha2.js';
-import { bytesToHex } from '@noble/hashes/utils.js';
+import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
 import * as Crypto from 'expo-crypto';
 import { constantTimeEqual, type Runtime } from '../../../backend/src/core/runtime';
 
@@ -14,4 +14,5 @@ export const mobileRuntime: Runtime = {
   randomHex: (bytes) => bytesToHex(Crypto.getRandomValues(new Uint8Array(bytes))),
   hashPassword: (password, salt) => bytesToHex(pbkdf2(sha256, password, salt, { c: 10_000, dkLen: 32 })),
   safeEqual: constantTimeEqual,
+  sha256Hex: (text) => bytesToHex(sha256(utf8ToBytes(text))),
 };

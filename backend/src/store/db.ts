@@ -1,8 +1,9 @@
-import type { Address, CartItem, Coupon, Favorite, Notification, Order, Parcel, Transaction, User, WarehouseItem } from './models.js';
+import type { Address, CartItem, Coupon, Favorite, Notification, Order, OtpRecord, Parcel, Transaction, User, WarehouseItem } from './models.js';
 
 export interface Data {
   users: User[];
   sessions: Record<string, string>;
+  otps: OtpRecord[];
   addresses: Address[];
   cart: CartItem[];
   orders: Order[];
@@ -19,6 +20,7 @@ export interface Data {
 const empty = (): Data => ({
   users: [],
   sessions: {},
+  otps: [],
   addresses: [],
   cart: [],
   orders: [],

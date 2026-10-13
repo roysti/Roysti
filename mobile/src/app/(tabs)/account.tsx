@@ -51,7 +51,7 @@ export default function AccountScreen() {
           </View>
           <View style={{ flex: 1 }}>
             <Text style={[styles.name, { color: '#fff' }]}>{me.data.user.name}</Text>
-            <Text style={styles.profileEmail}>{me.data.user.email}</Text>
+            <Text style={styles.profileEmail}>{me.data.user.phone ?? me.data.user.email}</Text>
           </View>
           <Pressable style={styles.balance} onPress={() => router.push('/wallet')}>
             <Text style={styles.balanceLabel}>Solde</Text>
@@ -83,6 +83,12 @@ export default function AccountScreen() {
           </Card>
 
           <Card style={styles.menu}>
+            <MenuRow
+              icon="shield-checkmark-outline"
+              label="Profil et sécurité"
+              href="/profile"
+              detail={me.data && ((me.data.user.phone && !me.data.user.phoneVerified) || (me.data.user.email && !me.data.user.emailVerified)) ? 'À vérifier' : undefined}
+            />
             <MenuRow icon="wallet-outline" label="Portefeuille et recharges" href="/wallet" />
             <MenuRow icon="location-outline" label="Adresses de livraison" href="/addresses" />
             <MenuRow icon="pricetags-outline" label="Coupons" href="/coupons" />

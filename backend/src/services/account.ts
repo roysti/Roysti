@@ -1,14 +1,8 @@
-import { config } from '../config.js';
 import { HttpError, badRequest } from '../lib/errors.js';
 import { round2 } from '../lib/pricing.js';
 import type { Store } from '../store/db.js';
 import type { TransactionType, User } from '../store/models.js';
 import type { Runtime } from '../core/runtime.js';
-
-export function publicUser(user: User) {
-  const { passwordHash: _hash, salt: _salt, ...rest } = user;
-  return rest;
-}
 
 const MAX_NOTIFICATIONS_PER_USER = 200;
 
@@ -17,32 +11,6 @@ export class AccountService {
     private readonly store: Store,
     private readonly runtime: Runtime,
   ) {}
-
-  register(email: string, password: string, name: string, startingBalance = 0): { user: User; token: string } {
-    const normalized = email.trim().toLowerCase();
-    if (this.store.data.users.some((u) => u.email === normalized)) throw new HttpError(409, 'Un compte existe déjà avec cet e-mail', 'email_taken');
-    const salt = this.runtime.randomHex(16);
-    const user: User = {
-      id: this.store.id(),
-      email: normalized,
-      name: name.trim() || normalized.split('@')[0]!,
-      salt,
-      passwordHash: this.runtime.hashPassword(password, salt),
-      balance: 0,
-      createdAt: new Date().toISOString(),
-    };
-    this.store.data.users.push(user);
-    if (startingBalance > 0) this.credit(user.id, startingBalance, 'topup', 'Crédit de bienvenue (démo)');
-    this.notify(user.id, 'Bienvenue sur Roysti', "Collez un lien Taobao, 1688 ou Alibaba, ou cherchez un article pour commencer.");
-    return { user, token: this.createSession(user.id) };
-  }
-
-  login(email: string, password: string): { user: User; token: string } {
-    const user = this.store.data.users.find((u) => u.email === email.trim().toLowerCase());
-    const valid = !!user && this.runtime.safeEqual(this.runtime.hashPassword(password, user.salt), user.passwordHash);
-    if (!user || !valid) throw new HttpError(401, 'E-mail ou mot de passe incorrect', 'invalid_credentials');
-    return { user, token: this.createSession(user.id) };
-  }
 
   logout(token: string) {
     delete this.store.data.sessions[token];
@@ -55,11 +23,19 @@ export class AccountService {
     return userId ? this.store.data.users.find((u) => u.id === userId) : undefined;
   }
 
-  private createSession(userId: string): string {
+  createSession(userId: string): string {
     const token = this.runtime.randomHex(32);
     this.store.data.sessions[token] = userId;
     this.store.save();
     return token;
+  }
+
+  /** Ferme toutes les sessions d'un utilisateur, sauf éventuellement `keepToken`. */
+  revokeSessions(userId: string, keepToken?: string) {
+    for (const [token, owner] of Object.entries(this.store.data.sessions)) {
+      if (owner === userId && token !== keepToken) delete this.store.data.sessions[token];
+    }
+    this.store.save();
   }
 
   getUser(userId: string): User {
@@ -131,29 +107,4 @@ export class AccountService {
     }
     this.store.save();
   }
-}
-
-export function seedDemo(store: Store, accounts: AccountService) {
-  if (!store.data.users.some((u) => u.email === 'demo@roysti.app')) {
-    const { user } = accounts.register('demo@roysti.app', 'demo1234', 'Client démo', config.demoStartingBalance);
-    store.data.addresses.push({
-      id: store.id(),
-      userId: user.id,
-      fullName: 'Client Démo',
-      phone: '+33 6 00 00 00 00',
-      country: 'FR',
-      city: 'Paris',
-      line1: '10 rue de la Paix',
-      postalCode: '75002',
-      isDefault: true,
-    });
-  }
-  if (!store.data.coupons.length) {
-    const inOneYear = new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString();
-    store.data.coupons.push(
-      { code: 'BIENVENUE', description: '10 CNY de réduction sur votre première commande (dès 100 CNY)', appliesTo: 'order', amount: 10, minSpend: 100, expiresAt: inOneYear },
-      { code: 'COLIS30', description: "30 CNY de réduction sur l'expédition internationale (dès 300 CNY)", appliesTo: 'parcel', amount: 30, minSpend: 300, expiresAt: inOneYear },
-    );
-  }
-  store.save();
 }

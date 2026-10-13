@@ -3,12 +3,37 @@ import type { Dimensions, ShippingQuote } from '../lib/shipping.js';
 
 export interface User {
   id: string;
-  email: string;
+  /** E-mail normalisé (minuscules). Un compte a au moins un e-mail ou un téléphone. */
+  email?: string;
+  /** Téléphone au format E.164, ex. « +261341234567 ». */
+  phone?: string;
+  emailVerified?: boolean;
+  phoneVerified?: boolean;
   name: string;
-  passwordHash: string;
-  salt: string;
+  /** Absents pour un compte créé par code (sans mot de passe). */
+  passwordHash?: string;
+  salt?: string;
   balance: number;
   createdAt: string;
+}
+
+export type OtpChannel = 'email' | 'sms';
+export type OtpPurpose = 'login' | 'verify' | 'reset';
+
+/** Code à usage unique envoyé par SMS ou e-mail (seule son empreinte est conservée). */
+export interface OtpRecord {
+  id: string;
+  channel: OtpChannel;
+  destination: string;
+  purpose: OtpPurpose;
+  /** Compte concerné (vérification d'un nouvel e-mail/téléphone). */
+  userId?: string;
+  codeHash: string;
+  salt: string;
+  attempts: number;
+  consumed: boolean;
+  createdAt: string;
+  expiresAt: string;
 }
 
 export interface Address {

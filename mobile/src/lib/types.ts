@@ -92,9 +92,32 @@ export interface Meta {
 
 export interface User {
   id: string;
-  email: string;
+  email?: string;
+  phone?: string;
+  emailVerified?: boolean;
+  phoneVerified?: boolean;
+  hasPassword: boolean;
   name: string;
   balance: number;
+}
+
+export type OtpChannel = 'email' | 'sms';
+export type OtpPurpose = 'login' | 'verify' | 'reset';
+
+export interface OtpSent {
+  channel: OtpChannel;
+  destination: string;
+  destinationMasked: string;
+  expiresInSec: number;
+  resendInSec: number;
+  demoCode?: string;
+}
+
+export interface AuthResult {
+  token: string;
+  user: User;
+  created?: boolean;
+  verification?: OtpSent;
 }
 
 export interface MeResponse {

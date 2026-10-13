@@ -18,6 +18,7 @@ function fakeRuntime(): Runtime {
     randomHex: (bytes) => (++n).toString(16).padStart(bytes * 2, '0'),
     hashPassword: (password, salt) => Array.from(`${salt}:${password}`, (c) => c.charCodeAt(0).toString(16)).join(''),
     safeEqual: constantTimeEqual,
+    sha256Hex: (text) => Array.from(text, (c) => c.charCodeAt(0).toString(16)).join(''),
   };
 }
 

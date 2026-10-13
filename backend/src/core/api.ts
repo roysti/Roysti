@@ -17,7 +17,9 @@ import { resolveProductLink } from '../lib/linkParser.js';
 import { quoteAll } from '../lib/shipping.js';
 import { MockProvider, featuredFrom } from '../providers/mock.js';
 import { ProviderError, type ProductProvider } from '../providers/types.js';
-import { AccountService, publicUser, seedDemo } from '../services/account.js';
+import { demoSenders, type Senders } from '../messaging/index.js';
+import { AccountService } from '../services/account.js';
+import { AuthService, OTP_RULES, publicUser, seedDemo } from '../services/auth.js';
 import { ORDER_STATUS_LABELS, PARCEL_STATUS_LABELS, ShopService } from '../services/shop.js';
 import type { Store } from '../store/db.js';
 import type { Address, User } from '../store/models.js';
@@ -63,12 +65,15 @@ export interface CoreOptions {
   demoMode?: boolean;
   /** Crée le compte démo et les coupons (défaut : true). */
   seed?: boolean;
+  /** Envoi des codes de connexion (défaut : démonstration, rien n'est envoyé). */
+  senders?: Senders;
 }
 
 export interface Core {
   store: Store;
   provider: ProductProvider;
   accounts: AccountService;
+  auth: AuthService;
   shop: ShopService;
   demoMode: boolean;
   handle(request: ApiRequest): Promise<ApiResponse>;
@@ -121,9 +126,40 @@ const estimateSchema = z.object({
   insuredValue: z.coerce.number().min(0).optional(),
 });
 
-const credentials = z.object({
-  email: z.email('E-mail invalide'),
-  password: z.string().min(6, 'Mot de passe : 6 caractères minimum').max(200),
+const countrySchema = z
+  .string()
+  .regex(/^[A-Za-z]{2}$/, 'Pays : code à 2 lettres (ex. MG)')
+  .transform((c) => c.toUpperCase())
+  .optional();
+const passwordSchema = z.string().min(8, 'Mot de passe : 8 caractères minimum').max(200);
+const channelSchema = z.enum(['email', 'sms']);
+const otpCodeSchema = z.string().regex(/^\d{6}$/, 'Le code comporte 6 chiffres');
+
+const registerSchema = z
+  .object({
+    email: z.string().max(254).optional(),
+    phone: z.string().max(32).optional(),
+    country: countrySchema,
+    password: passwordSchema,
+    name: z.string().max(80).default(''),
+  })
+  .refine((v) => !!v.email?.trim() || !!v.phone?.trim(), 'Indiquez un e-mail ou un numéro de téléphone');
+
+const loginSchema = z
+  .object({
+    identifier: z.string().min(3).max(254).optional(),
+    /** Ancien format (e-mail seul), toujours accepté. */
+    email: z.string().max(254).optional(),
+    phone: z.string().max(32).optional(),
+    country: countrySchema,
+    password: z.string().min(1, 'Mot de passe requis').max(200),
+  })
+  .refine((v) => !!(v.identifier ?? v.email ?? v.phone), 'Indiquez votre e-mail ou votre numéro');
+
+const otpTargetSchema = z.object({
+  channel: channelSchema,
+  destination: z.string().min(3).max(254),
+  country: countrySchema,
 });
 
 const addressSchema = z.object({
@@ -245,22 +281,93 @@ const ROUTES: Route[] = [
 
   // --- Compte ---
   {
+    method: 'GET',
+    path: '/auth/config',
+    handler: ({ core }) => ({
+      channels: { email: { demo: core.auth.senderIsDemo('email') }, sms: { demo: core.auth.senderIsDemo('sms') } },
+      otp: { length: OTP_RULES.length, ttlSec: OTP_RULES.ttlMs / 1000, resendSec: OTP_RULES.resendMs / 1000 },
+      passwordMinLength: 8,
+    }),
+  },
+  {
     method: 'POST',
     path: '/auth/register',
     status: 201,
-    handler: ({ core, body }) => {
-      const input = parse(credentials.extend({ name: z.string().max(80).default('') }), body);
-      const { user, token } = core.accounts.register(input.email, input.password, input.name);
-      return { token, user: publicUser(user) };
+    handler: async ({ core, body }) => {
+      const input = parse(registerSchema, body);
+      const { user, token } = core.auth.register(input);
+      // Code de vérification envoyé tout de suite (téléphone en priorité).
+      const channel = user.phone ? 'sms' : 'email';
+      let verification: Awaited<ReturnType<AuthService['requestOtp']>> | undefined;
+      try {
+        verification = await core.auth.requestOtp({ channel, destination: (user.phone ?? user.email)! }, 'verify', user.id);
+      } catch {
+        verification = undefined; // le compte reste utilisable ; la vérification pourra être relancée
+      }
+      return { token, user: publicUser(user), verification };
     },
   },
   {
     method: 'POST',
     path: '/auth/login',
     handler: ({ core, body }) => {
-      const input = parse(credentials, body);
-      const { user, token } = core.accounts.login(input.email, input.password);
+      const input = parse(loginSchema, body);
+      const { user, token } = core.auth.login((input.identifier ?? input.email ?? input.phone)!, input.password, input.country);
       return { token, user: publicUser(user) };
+    },
+  },
+  {
+    method: 'POST',
+    path: '/auth/otp/request',
+    handler: ({ core, body, token }) => {
+      const input = parse(otpTargetSchema.extend({ purpose: z.enum(['login', 'verify', 'reset']) }), body);
+      const user = input.purpose === 'verify' ? core.accounts.userForToken(token) : undefined;
+      return core.auth.requestOtp(input, input.purpose, user?.id);
+    },
+  },
+  {
+    method: 'POST',
+    path: '/auth/otp/verify',
+    handler: ({ core, body }) => {
+      const input = parse(otpTargetSchema.extend({ code: otpCodeSchema, name: z.string().max(80).optional() }), body);
+      const { user, token, created } = core.auth.loginWithOtp(input, input.code, input.name);
+      return { token, user: publicUser(user), created };
+    },
+  },
+  {
+    method: 'POST',
+    path: '/auth/password/reset',
+    handler: ({ core, body }) => {
+      const input = parse(otpTargetSchema.extend({ code: otpCodeSchema, newPassword: passwordSchema }), body);
+      const { user, token } = core.auth.resetPassword(input, input.code, input.newPassword);
+      return { token, user: publicUser(user) };
+    },
+  },
+  {
+    method: 'POST',
+    path: '/me/verify',
+    auth: true,
+    handler: ({ core, user, body }) => {
+      const input = parse(otpTargetSchema.extend({ code: otpCodeSchema }), body);
+      return { user: publicUser(core.auth.verifyIdentifier(user.id, input, input.code)) };
+    },
+  },
+  {
+    method: 'PATCH',
+    path: '/me',
+    auth: true,
+    handler: ({ core, user, body }) => {
+      const input = parse(z.object({ name: z.string().min(1).max(80).optional() }), body);
+      return { user: publicUser(core.auth.updateProfile(user.id, input)) };
+    },
+  },
+  {
+    method: 'POST',
+    path: '/me/password',
+    auth: true,
+    handler: ({ core, user, body, token }) => {
+      const input = parse(z.object({ currentPassword: z.string().max(200).optional(), newPassword: passwordSchema }), body);
+      return { user: publicUser(core.auth.changePassword(user.id, input.newPassword, input.currentPassword, token)) };
     },
   },
   {
@@ -581,13 +688,15 @@ const errorBody = (message: string, code?: string) => ({ error: message, code })
 
 export function createCore(options: CoreOptions): Core {
   const accounts = new AccountService(options.store, options.runtime);
+  const auth = new AuthService(options.store, options.runtime, accounts, options.senders ?? demoSenders());
   const shop = new ShopService(options.store, options.provider, accounts);
-  if (options.seed ?? true) seedDemo(options.store, accounts);
+  if (options.seed ?? true) seedDemo(options.store, auth, config.demoStartingBalance);
 
   const core: Core = {
     store: options.store,
     provider: options.provider,
     accounts,
+    auth,
     shop,
     demoMode: options.demoMode ?? config.demoMode,
     async handle(request) {
