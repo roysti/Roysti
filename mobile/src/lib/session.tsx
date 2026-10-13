@@ -1,20 +1,26 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
-import { api, apiConfig } from './api';
+import { api, apiConfig, defaultApiMode, type ApiMode } from './api';
+import { resetLocalData } from './local-api';
 import type { MeResponse, Meta } from './types';
 
-const KEYS = { token: 'roysti.token', currency: 'roysti.currency', apiUrl: 'roysti.apiUrl' };
+const KEYS = { token: 'roysti.token', currency: 'roysti.currency', apiUrl: 'roysti.apiUrl', apiMode: 'roysti.apiMode' };
 
 interface Session {
   ready: boolean;
   token: string | null;
   currency: string;
   apiUrl: string | null;
+  apiMode: ApiMode;
   signIn: (token: string) => Promise<void>;
   signOut: () => Promise<void>;
   setCurrency: (currency: string) => Promise<void>;
   setApiUrl: (url: string | null) => Promise<void>;
+  /** Change la source des données ; la session est fermée car les comptes diffèrent. */
+  setApiMode: (mode: ApiMode) => Promise<void>;
+  /** Mode intégré : efface les données locales et recrée le compte démo. */
+  resetLocal: () => Promise<void>;
 }
 
 const SessionContext = createContext<Session | null>(null);
@@ -42,15 +48,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [currency, setCurrencyState] = useState('EUR');
   const [apiUrl, setApiUrlState] = useState<string | null>(null);
+  const [apiMode, setApiModeState] = useState<ApiMode>(defaultApiMode);
 
   useEffect(() => {
     (async () => {
-      const [t, c, u] = await Promise.all([read(KEYS.token), read(KEYS.currency), read(KEYS.apiUrl)]);
+      const [t, c, u, m] = await Promise.all([read(KEYS.token), read(KEYS.currency), read(KEYS.apiUrl), read(KEYS.apiMode)]);
+      const mode: ApiMode = m === 'local' || m === 'remote' ? m : defaultApiMode;
       apiConfig.setToken(t);
       apiConfig.setBaseUrl(u);
+      apiConfig.setMode(mode);
       setToken(t);
       if (c) setCurrencyState(c);
       setApiUrlState(u);
+      setApiModeState(mode);
       setReady(true);
     })();
   }, []);
@@ -89,8 +99,38 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     [queryClient],
   );
 
+  const clearSession = useCallback(async () => {
+    apiConfig.setToken(null);
+    setToken(null);
+    await write(KEYS.token, null);
+    queryClient.clear();
+  }, [queryClient]);
+
+  useEffect(() => {
+    // Jeton refusé par l'API : on ferme la session pour réafficher l'écran de connexion.
+    apiConfig.setOnUnauthorized(() => {
+      clearSession();
+    });
+    return () => apiConfig.setOnUnauthorized(null);
+  }, [clearSession]);
+
+  const setApiMode = useCallback(
+    async (mode: ApiMode) => {
+      apiConfig.setMode(mode);
+      setApiModeState(mode);
+      await write(KEYS.apiMode, mode);
+      await clearSession();
+    },
+    [clearSession],
+  );
+
+  const resetLocal = useCallback(async () => {
+    await resetLocalData();
+    await clearSession();
+  }, [clearSession]);
+
   return (
-    <SessionContext.Provider value={{ ready, token, currency, apiUrl, signIn, signOut, setCurrency, setApiUrl }}>
+    <SessionContext.Provider value={{ ready, token, currency, apiUrl, apiMode, signIn, signOut, setCurrency, setApiUrl, setApiMode, resetLocal }}>
       {children}
     </SessionContext.Provider>
   );

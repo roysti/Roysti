@@ -1,4 +1,5 @@
 import type { Platform } from '../types.js';
+import { timeoutSignal } from './env.js';
 
 export interface ParsedLink {
   platform: Platform;
@@ -134,14 +135,14 @@ type Fetcher = (url: string, init?: RequestInit) => Promise<Response>;
  * en cherchant une URL d'article dans le corps HTML renvoyé.
  * Fonctionnement au mieux : les plateformes peuvent changer ce format sans préavis.
  */
-export async function resolveProductLink(input: string, fetcher: Fetcher = fetch): Promise<ParsedLink | null> {
+export async function resolveProductLink(input: string, fetcher?: Fetcher): Promise<ParsedLink | null> {
   const direct = parseProductLink(input);
   if (direct) return direct;
   if (!isShortLink(input)) return null;
 
   const raw = extractFirstUrl(input)!;
   try {
-    const res = await fetcher(raw, { redirect: 'follow', signal: AbortSignal.timeout(8000) });
+    const res = await (fetcher ?? fetch)(raw, { redirect: 'follow', signal: timeoutSignal(8000) });
     const fromFinalUrl = parseProductLink(res.url);
     if (fromFinalUrl) return fromFinalUrl;
     const body = await res.text();

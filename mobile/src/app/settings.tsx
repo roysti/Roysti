@@ -3,6 +3,7 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Button, Card, Chip, Field, Notice, Row } from '@/components/ui';
 import { colors, spacing } from '@/constants/theme';
 import { apiConfig, defaultApiUrl } from '@/lib/api';
+import { confirm } from '@/lib/confirm';
 import { useRates } from '@/lib/money';
 import { useMeta, useSession } from '@/lib/session';
 
@@ -20,11 +21,12 @@ const CURRENCY_NAMES: Record<string, string> = {
 };
 
 export default function SettingsScreen() {
-  const { currency, setCurrency, apiUrl, setApiUrl } = useSession();
+  const { currency, setCurrency, apiUrl, setApiUrl, apiMode, setApiMode, resetLocal } = useSession();
   const meta = useMeta();
   const rates = useRates();
   const [url, setUrl] = useState(apiUrl ?? '');
   const [saved, setSaved] = useState(false);
+  const [resetDone, setResetDone] = useState(false);
 
   return (
     <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
@@ -45,18 +47,44 @@ export default function SettingsScreen() {
       </Card>
 
       <Card style={{ gap: spacing.md }}>
-        <Text style={styles.title}>Serveur</Text>
-        <Field label="Adresse de l’API" value={url} onChangeText={setUrl} placeholder={defaultApiUrl()} autoCapitalize="none" autoCorrect={false} />
-        <Text style={styles.meta}>Actuellement : {apiConfig.baseUrl}</Text>
-        {saved ? <Notice tone="success">Adresse enregistrée.</Notice> : null}
-        <Button
-          title="Enregistrer"
-          variant="secondary"
-          onPress={async () => {
-            await setApiUrl(url || null);
-            setSaved(true);
-          }}
-        />
+        <Text style={styles.title}>Source des données</Text>
+        <View style={styles.wrap}>
+          <Chip label="Intégrée (hors ligne)" active={apiMode === 'local'} onPress={() => apiMode !== 'local' && setApiMode('local')} />
+          <Chip label="Serveur Roysti" active={apiMode === 'remote'} onPress={() => apiMode !== 'remote' && setApiMode('remote')} />
+        </View>
+        {apiMode === 'local' ? (
+          <>
+            <Text style={styles.meta}>
+              L’application fonctionne seule, sans serveur, avec le catalogue de démonstration. Votre compte, vos commandes et vos colis sont enregistrés sur ce téléphone.
+            </Text>
+            {resetDone ? <Notice tone="success">Données réinitialisées. Reconnectez-vous avec le compte démo.</Notice> : null}
+            <Button
+              title="Réinitialiser les données de démo"
+              variant="danger"
+              icon="refresh"
+              onPress={() =>
+                confirm('Réinitialiser ?', 'Comptes, commandes, colis et solde enregistrés sur ce téléphone seront effacés.', async () => {
+                  await resetLocal();
+                  setResetDone(true);
+                })
+              }
+            />
+          </>
+        ) : (
+          <>
+            <Field label="Adresse de l’API" value={url} onChangeText={setUrl} placeholder={defaultApiUrl()} autoCapitalize="none" autoCorrect={false} />
+            <Text style={styles.meta}>Actuellement : {apiConfig.baseUrl}</Text>
+            {saved ? <Notice tone="success">Adresse enregistrée.</Notice> : null}
+            <Button
+              title="Enregistrer"
+              variant="secondary"
+              onPress={async () => {
+                await setApiUrl(url || null);
+                setSaved(true);
+              }}
+            />
+          </>
+        )}
         {meta.data ? (
           <View>
             <Row label="Fournisseur de données" value={meta.data.provider} />

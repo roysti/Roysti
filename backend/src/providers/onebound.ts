@@ -13,6 +13,7 @@
 import { buildSourceUrl } from '../lib/linkParser.js';
 import type { Platform, ProductDetail, ProductSummary, SearchParams, SearchResult, Sku, SkuProp } from '../types.js';
 import { ProviderError, type ProductProvider } from './types.js';
+import { env, timeoutSignal } from '../lib/env.js';
 
 type Json = Record<string, unknown>;
 
@@ -160,7 +161,7 @@ export class OneboundProvider implements ProductProvider {
   constructor(
     private readonly key: string,
     private readonly secret: string,
-    private readonly baseUrl = process.env.ONEBOUND_BASE_URL ?? 'https://api-gw.onebound.cn',
+    private readonly baseUrl = env('ONEBOUND_BASE_URL') ?? 'https://api-gw.onebound.cn',
     private readonly fetcher: typeof fetch = fetch,
   ) {}
 
@@ -173,7 +174,7 @@ export class OneboundProvider implements ProductProvider {
     url.searchParams.set('lang', 'zh-CN');
     for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== '') url.searchParams.set(k, String(v));
 
-    const res = await this.fetcher(url, { signal: AbortSignal.timeout(15000) });
+    const res = await this.fetcher(url, { signal: timeoutSignal(15000) });
     if (!res.ok) throw new ProviderError(`Fournisseur indisponible (HTTP ${res.status})`);
     const json = obj(await res.json());
     const error = str(json.error ?? json.error_code);

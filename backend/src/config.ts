@@ -6,15 +6,16 @@
  * (leurs grilles changent souvent et les sources publiques se contredisent).
  * Adaptez-les à vos propres contrats transporteurs et à votre modèle économique.
  */
+import { env } from './lib/env.js';
 import type { Platform } from './types.js';
 
 export const config = {
-  port: Number(process.env.PORT ?? 4000),
+  port: Number(env('PORT') ?? 4000),
   /** Active les routes /api/demo/* qui simulent le travail de l'entrepôt. */
-  demoMode: (process.env.DEMO_MODE ?? 'true') === 'true',
+  demoMode: (env('DEMO_MODE') ?? 'true') === 'true',
   /** Fichier de persistance JSON (vide = mémoire uniquement). */
-  dataFile: process.env.DATA_FILE ?? '',
-  provider: process.env.PRODUCT_PROVIDER ?? 'mock',
+  dataFile: env('DATA_FILE') ?? '',
+  provider: env('PRODUCT_PROVIDER') ?? 'mock',
 
   fees: {
     /** Frais de service de l'agent, en pourcentage du prix des articles, par plateforme. */
@@ -77,9 +78,9 @@ export const config = {
    * Valeur par défaut volontairement fictive : configurez WAREHOUSE_ADDRESS en production.
    */
   warehouse: {
-    recipient: process.env.WAREHOUSE_RECIPIENT ?? 'Roysti 仓库',
-    address: process.env.WAREHOUSE_ADDRESS ?? 'À configurer (variable WAREHOUSE_ADDRESS)',
-    phone: process.env.WAREHOUSE_PHONE ?? 'À configurer',
+    recipient: env('WAREHOUSE_RECIPIENT') ?? 'Roysti 仓库',
+    address: env('WAREHOUSE_ADDRESS') ?? 'À configurer (variable WAREHOUSE_ADDRESS)',
+    phone: env('WAREHOUSE_PHONE') ?? 'À configurer',
   },
 
   /** Montant offert au compte de démonstration. */

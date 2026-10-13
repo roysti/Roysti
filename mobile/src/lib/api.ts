@@ -1,5 +1,6 @@
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
+import { localRequest } from './local-api';
 
 export class ApiError extends Error {
   constructor(
@@ -12,7 +13,16 @@ export class ApiError extends Error {
 }
 
 /**
- * URL de l'API par défaut :
+ * « local » : l'API est exécutée dans l'application (hors ligne, catalogue de démo).
+ * « remote » : l'application appelle un serveur Roysti (backend/) via HTTP.
+ */
+export type ApiMode = 'local' | 'remote';
+
+/** Mode par défaut : distant seulement si une URL est fournie au build (EXPO_PUBLIC_API_URL). */
+export const defaultApiMode: ApiMode = process.env.EXPO_PUBLIC_API_URL ? 'remote' : 'local';
+
+/**
+ * URL de l'API distante par défaut :
  * 1. EXPO_PUBLIC_API_URL si défini ;
  * 2. sur le web, même hôte que la page, port 4000 ;
  * 3. sur téléphone en développement, l'IP de l'ordinateur qui sert Metro (hostUri) ;
@@ -29,9 +39,20 @@ export function defaultApiUrl(): string {
   return Platform.OS === 'android' ? 'http://10.0.2.2:4000/api' : 'http://localhost:4000/api';
 }
 
-const state = { baseUrl: defaultApiUrl(), token: null as string | null };
+const state = {
+  mode: defaultApiMode,
+  baseUrl: defaultApiUrl(),
+  token: null as string | null,
+  onUnauthorized: null as (() => void) | null,
+};
 
 export const apiConfig = {
+  get mode() {
+    return state.mode;
+  },
+  setMode(mode: ApiMode) {
+    state.mode = mode;
+  },
   get baseUrl() {
     return state.baseUrl;
   },
@@ -41,20 +62,48 @@ export const apiConfig = {
   setToken(token: string | null) {
     state.token = token;
   },
+  /** Appelé quand l'API refuse le jeton en cours (session expirée, données réinitialisées…). */
+  setOnUnauthorized(callback: (() => void) | null) {
+    state.onUnauthorized = callback;
+  },
 };
+
+function fail(status: number, message: string | undefined, code: string | undefined): never {
+  if (status === 401 && state.token && code === 'unauthorized') state.onUnauthorized?.();
+  throw new ApiError(message ?? `Erreur ${status}`, status, code);
+}
 
 type Query = Record<string, string | number | boolean | undefined | null>;
 
-export async function api<T>(path: string, options: { method?: string; body?: unknown; query?: Query } = {}): Promise<T> {
-  const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(options.query ?? {})) {
-    if (value !== undefined && value !== null && value !== '') params.set(key, String(value));
+function cleanQuery(query: Query = {}): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined && value !== null && value !== '') out[key] = String(value);
   }
-  const url = `${state.baseUrl}${path}${params.size ? `?${params}` : ''}`;
+  return out;
+}
+
+export async function api<T>(path: string, options: { method?: string; body?: unknown; query?: Query } = {}): Promise<T> {
+  const method = options.method ?? (options.body ? 'POST' : 'GET');
+  const query = cleanQuery(options.query);
+
+  if (state.mode === 'local') {
+    const res = await localRequest({ method, path, query, body: options.body, token: state.token ?? undefined });
+    if (res.status >= 400) {
+      const err = (res.body ?? {}) as { error?: string; code?: string };
+      fail(res.status, err.error, err.code);
+    }
+    return res.body as T;
+  }
+
+  const search = Object.entries(query)
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join('&');
+  const url = `${state.baseUrl}${path}${search ? `?${search}` : ''}`;
   let res: Response;
   try {
     res = await fetch(url, {
-      method: options.method ?? (options.body ? 'POST' : 'GET'),
+      method,
       headers: {
         Accept: 'application/json',
         ...(options.body ? { 'Content-Type': 'application/json' } : {}),
@@ -63,11 +112,11 @@ export async function api<T>(path: string, options: { method?: string; body?: un
       body: options.body ? JSON.stringify(options.body) : undefined,
     });
   } catch {
-    throw new ApiError(`Impossible de joindre le serveur (${state.baseUrl}). Vérifiez que l'API est démarrée et l'adresse dans Réglages.`, 0, 'network');
+    throw new ApiError(`Impossible de joindre le serveur (${state.baseUrl}). Vérifiez qu'il est démarré, ou revenez au mode « intégré » dans Réglages.`, 0, 'network');
   }
   if (res.status === 204) return undefined as T;
   const json = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
-  if (!res.ok) throw new ApiError(json.error ?? `Erreur ${res.status}`, res.status, json.code);
+  if (!res.ok) fail(res.status, json.error, json.code);
   return json as T;
 }
 

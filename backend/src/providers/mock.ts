@@ -231,6 +231,7 @@ interface IndexedProduct {
   haystack: string;
 }
 
+// Échappements Unicode pris en charge par Node et par Hermes V1 (compilés par hermesc).
 const WORD_SPLIT = /[^\p{L}\p{N}]+/u;
 
 /** Mot exact du titre : 4, début de mot du titre : 3, ailleurs dans le titre : 2, catégorie/boutique : 1. */

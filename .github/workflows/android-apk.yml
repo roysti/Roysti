@@ -1,0 +1,126 @@
+# Compile l'application Android (APK autonome, mode hors ligne intégré)
+# et la publie dans une release GitHub, téléchargeable directement depuis un téléphone.
+name: APK Android
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - claude/brave-wozniak-f0alli
+      - main
+    paths:
+      - 'mobile/**'
+      - 'backend/src/**'
+      - 'backend/package*.json'
+      - '.github/workflows/android-apk.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    name: Compiler et publier l'APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CI: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            mobile/package-lock.json
+            backend/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Composants du SDK Android (NDK et CMake attendus par React Native)
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" "build-tools;36.0.0" "ndk;27.1.12297006" "cmake;3.22.1" > /dev/null
+
+      - name: Backend – dépendances et tests (logique partagée avec l'app)
+        working-directory: backend
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+
+      - name: Application – dépendances
+        working-directory: mobile
+        run: npm ci
+
+      - name: Application – types et lint
+        working-directory: mobile
+        run: |
+          npx tsc --noEmit
+          npx eslint src metro.config.js
+
+      - name: Numéro de version Android (versionCode = numéro du run)
+        working-directory: mobile
+        run: |
+          jq --argjson code "${{ github.run_number }}" '.expo.android.versionCode = $code' app.json > app.tmp.json
+          mv app.tmp.json app.json
+          echo "VERSION=$(jq -r .expo.version app.json)" >> "$GITHUB_ENV"
+
+      - name: Génération du projet Android (expo prebuild)
+        working-directory: mobile
+        run: npx expo prebuild --platform android --no-install
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Compilation (assembleRelease)
+        working-directory: mobile/android
+        run: ./gradlew assembleRelease --no-daemon --stacktrace -PreactNativeArchitectures=armeabi-v7a,arm64-v8a
+
+      - name: Préparer les fichiers
+        run: |
+          mkdir -p dist
+          cp mobile/android/app/build/outputs/apk/release/app-release.apk dist/Roysti.apk
+          cp dist/Roysti.apk "dist/Roysti-${VERSION}-build${{ github.run_number }}.apk"
+          (cd dist && sha256sum Roysti.apk > Roysti.apk.sha256)
+          ls -la dist
+          unzip -l dist/Roysti.apk > dist/contents.txt
+          grep -q "assets/index.android.bundle" dist/contents.txt || { echo "Bundle JavaScript absent de l'APK"; exit 1; }
+          grep -E "lib/(arm64-v8a|armeabi-v7a)/" dist/contents.txt | head -5
+          rm dist/contents.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Roysti-apk-build${{ github.run_number }}
+          path: dist/
+          retention-days: 30
+
+      - name: Publier la release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="apk-v${VERSION}-build${{ github.run_number }}"
+          SHA256=$(cut -d' ' -f1 dist/Roysti.apk.sha256)
+          cat > notes.md <<EOF
+          APK Android de test de **Roysti** (version ${VERSION}, build ${{ github.run_number }}, commit ${GITHUB_SHA::7}).
+
+          **Installation** : ouvrez ce lien sur le téléphone Android, téléchargez \`Roysti.apk\`, puis autorisez « Installer des applications inconnues » pour votre navigateur si Android le demande.
+
+          - Fonctionne **sans serveur** : catalogue de démonstration intégré, données enregistrées sur le téléphone.
+          - Compte démo : \`demo@roysti.app\` / \`demo1234\` (bouton « Utiliser le compte démo »).
+          - Build de test signé avec la clé de debug d'Expo : ne pas publier sur le Play Store.
+
+          SHA-256 de Roysti.apk : \`${SHA256}\`
+          EOF
+          gh release create "$TAG" dist/Roysti.apk "dist/Roysti-${VERSION}-build${{ github.run_number }}.apk" dist/Roysti.apk.sha256 \
+            --target "$GITHUB_SHA" \
+            --title "Roysti ${VERSION} – APK de test (build ${{ github.run_number }})" \
+            --notes-file notes.md \
+            --latest

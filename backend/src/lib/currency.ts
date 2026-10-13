@@ -1,4 +1,5 @@
 import { FALLBACK_RATES, SUPPORTED_CURRENCIES } from '../config.js';
+import { env, timeoutSignal } from './env.js';
 
 export interface RatesSnapshot {
   base: 'CNY';
@@ -7,7 +8,7 @@ export interface RatesSnapshot {
   updatedAt: string;
 }
 
-const RATES_URL = process.env.RATES_URL ?? 'https://open.er-api.com/v6/latest/CNY';
+const RATES_URL = env('RATES_URL') ?? 'https://open.er-api.com/v6/latest/CNY';
 const TTL_MS = 6 * 60 * 60 * 1000;
 
 let cache: RatesSnapshot | null = null;
@@ -20,11 +21,12 @@ function fallback(): RatesSnapshot {
  * Taux de change depuis le CNY. Interroge un service public (mis en cache 6 h)
  * et revient aux taux approximatifs de config.ts en cas d'échec.
  */
-export async function getRates(fetcher: typeof fetch = fetch): Promise<RatesSnapshot> {
+export async function getRates(fetcher?: typeof fetch): Promise<RatesSnapshot> {
   if (cache && Date.now() - new Date(cache.updatedAt).getTime() < TTL_MS) return cache;
-  if (process.env.RATES_OFFLINE === 'true') return (cache = fallback());
+  if (env('RATES_OFFLINE') === 'true') return (cache = fallback());
   try {
-    const res = await fetcher(RATES_URL, { signal: AbortSignal.timeout(5000) });
+    // fetch est lu dans le try : un moteur sans fetch retombe sur les taux de secours.
+    const res = await (fetcher ?? fetch)(RATES_URL, { signal: timeoutSignal(5000) });
     const json = (await res.json()) as { rates?: Record<string, number> };
     if (!res.ok || !json.rates) throw new Error('Réponse de taux invalide');
     const rates: Record<string, number> = {};

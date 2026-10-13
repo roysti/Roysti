@@ -3,12 +3,11 @@ import { before, describe, it } from 'node:test';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { MockProvider } from '../src/providers/mock.js';
-import { Store } from '../src/store/db.js';
 
 process.env.RATES_OFFLINE = 'true';
 
 describe('API – parcours complet', () => {
-  const { app } = createApp({ store: new Store(), provider: new MockProvider(), demoMode: true });
+  const { app } = createApp({ provider: new MockProvider(), demoMode: true });
   let token = '';
   const auth = () => ({ Authorization: `Bearer ${token}` });
 

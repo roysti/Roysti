@@ -1,13 +1,9 @@
-import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { config } from '../config.js';
 import { HttpError, badRequest } from '../lib/errors.js';
 import { round2 } from '../lib/pricing.js';
 import type { Store } from '../store/db.js';
 import type { TransactionType, User } from '../store/models.js';
-
-function hashPassword(password: string, salt: string): string {
-  return scryptSync(password, salt, 64).toString('hex');
-}
+import type { Runtime } from '../core/runtime.js';
 
 export function publicUser(user: User) {
   const { passwordHash: _hash, salt: _salt, ...rest } = user;
@@ -15,18 +11,21 @@ export function publicUser(user: User) {
 }
 
 export class AccountService {
-  constructor(private readonly store: Store) {}
+  constructor(
+    private readonly store: Store,
+    private readonly runtime: Runtime,
+  ) {}
 
   register(email: string, password: string, name: string, startingBalance = 0): { user: User; token: string } {
     const normalized = email.trim().toLowerCase();
     if (this.store.data.users.some((u) => u.email === normalized)) throw new HttpError(409, 'Un compte existe déjà avec cet e-mail', 'email_taken');
-    const salt = randomBytes(16).toString('hex');
+    const salt = this.runtime.randomHex(16);
     const user: User = {
       id: this.store.id(),
       email: normalized,
       name: name.trim() || normalized.split('@')[0]!,
       salt,
-      passwordHash: hashPassword(password, salt),
+      passwordHash: this.runtime.hashPassword(password, salt),
       balance: 0,
       createdAt: new Date().toISOString(),
     };
@@ -38,8 +37,7 @@ export class AccountService {
 
   login(email: string, password: string): { user: User; token: string } {
     const user = this.store.data.users.find((u) => u.email === email.trim().toLowerCase());
-    const valid =
-      user && timingSafeEqual(Buffer.from(hashPassword(password, user.salt), 'hex'), Buffer.from(user.passwordHash, 'hex'));
+    const valid = !!user && this.runtime.safeEqual(this.runtime.hashPassword(password, user.salt), user.passwordHash);
     if (!user || !valid) throw new HttpError(401, 'E-mail ou mot de passe incorrect', 'invalid_credentials');
     return { user, token: this.createSession(user.id) };
   }
@@ -56,7 +54,7 @@ export class AccountService {
   }
 
   private createSession(userId: string): string {
-    const token = randomBytes(32).toString('hex');
+    const token = this.runtime.randomHex(32);
     this.store.data.sessions[token] = userId;
     this.store.save();
     return token;

@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import type { Address, CartItem, Coupon, Favorite, Notification, Order, Parcel, Transaction, User, WarehouseItem } from './models.js';
 
 export interface Data {
@@ -34,20 +32,37 @@ const empty = (): Data => ({
   counters: { order: 0, parcel: 0 },
 });
 
+export interface StoreOptions {
+  /** Générateur d'identifiants uniques. */
+  uuid: () => string;
+  /** Données chargées au démarrage. */
+  initial?: Partial<Data>;
+  /** Écriture des données (fichier JSON, AsyncStorage…) ; absent = mémoire uniquement. */
+  persist?: (data: Data) => void;
+  /** Délai de regroupement des écritures en ms (défaut 200 ; 0 = dès que possible). */
+  persistDelayMs?: number;
+}
+
 /**
- * Stockage en mémoire, avec persistance JSON optionnelle (DATA_FILE).
- * Suffisant pour une démo ; en production, remplacez-le par PostgreSQL (Prisma, Drizzle…).
+ * Stockage en mémoire, avec persistance optionnelle (fichier JSON côté serveur,
+ * AsyncStorage dans l'application). En production, remplacez-le par PostgreSQL.
  */
 export class Store {
   data: Data;
-  private timer: NodeJS.Timeout | null = null;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private readonly uuid: () => string;
+  private readonly persist?: (data: Data) => void;
+  private readonly persistDelayMs: number;
 
-  constructor(private readonly file = '') {
-    this.data = file && existsSync(file) ? { ...empty(), ...(JSON.parse(readFileSync(file, 'utf8')) as Partial<Data>) } : empty();
+  constructor(options: StoreOptions) {
+    this.uuid = options.uuid;
+    this.persist = options.persist;
+    this.persistDelayMs = options.persistDelayMs ?? 200;
+    this.data = { ...empty(), ...(options.initial ?? {}) };
   }
 
   id(): string {
-    return randomUUID();
+    return this.uuid();
   }
 
   nextNumber(kind: 'order' | 'parcel'): string {
@@ -57,13 +72,14 @@ export class Store {
     return `${kind === 'order' ? 'RO' : 'PK'}${date}${String(this.data.counters[kind]).padStart(5, '0')}`;
   }
 
-  /** Enregistre (avec un léger différé) si un fichier de persistance est configuré. */
+  /** Enregistre avec un léger différé, si une persistance est configurée. */
   save() {
-    if (!this.file) return;
+    const persist = this.persist;
+    if (!persist) return;
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
-      writeFileSync(this.file, JSON.stringify(this.data, null, 2));
       this.timer = null;
-    }, 200);
+      persist(this.data);
+    }, this.persistDelayMs);
   }
 }
