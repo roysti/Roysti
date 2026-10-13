@@ -18,7 +18,7 @@ import { buildSourceUrl } from '../lib/linkParser.js';
 import { getRates } from '../lib/currency.js';
 import { timeoutSignal } from '../lib/env.js';
 import type { Platform, PriceTier, ProductDetail, ProductSummary, SearchParams, SearchResult, Sku, SkuProp } from '../types.js';
-import { ProviderError, type ProductProvider } from './types.js';
+import { ProviderError, type GetProductOptions, type ProductProvider } from './types.js';
 import { arr, buildUrl, normalizeImageUrl, num, obj, parsePropPath, positive, redact, str, type Json } from './util.js';
 
 export { normalizeImageUrl };
@@ -289,8 +289,13 @@ export class OneboundProvider implements ProductProvider {
     throw new ProviderError(`Erreur Onebound ${code || ''} ${reason}`.replace(/\s+/g, ' ').trim());
   }
 
-  async getProduct(platform: Platform, itemId: string): Promise<ProductDetail | null> {
-    const json = await this.call(platform, 'item_get', { num_iid: itemId, ...(platform === '1688' ? {} : { is_promotion: 1 }) });
+  async getProduct(platform: Platform, itemId: string, options?: GetProductOptions): Promise<ProductDetail | null> {
+    // cache=no : Onebound sert sinon une copie qui peut dater de plusieurs heures (data_update).
+    const json = await this.call(platform, 'item_get', {
+      num_iid: itemId,
+      ...(platform === '1688' ? {} : { is_promotion: 1 }),
+      ...(options?.fresh ? { cache: 'no' } : {}),
+    });
     const item = obj(json?.item);
     if (!str(item.num_iid) && !str(item.title)) return null;
     const rate = str(item.currency_code).toUpperCase() === 'USD' ? await this.usdToCny() : undefined;

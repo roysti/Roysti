@@ -70,6 +70,11 @@ const GLOSSARY: [string, string][] = [
   ['powerbank', '充电宝'],
   ['ecouteurs', '耳机'],
   ['ecouteur', '耳机'],
+  ['casque moto', '摩托车头盔'],
+  ['casque velo', '自行车头盔'],
+  ['casque de moto', '摩托车头盔'],
+  ['casque de velo', '自行车头盔'],
+  ['casque audio', '头戴式耳机'],
   ['casque', '头戴式耳机'],
   ['enceinte', '音箱'],
   ['clavier', '键盘'],
@@ -149,7 +154,10 @@ export function foldText(text: string): string {
   return text
     .toLowerCase()
     .replace(/[àâäáçéèêëîïíôöóùûüúÿñœæ]/g, (c) => ACCENTS[c] ?? c)
+    // Le point et la virgule entre deux chiffres sont gardés (« 3.5mm », « 2,4 GHz »).
+    .replace(/(\d)[.,](?=\d)/g, '$1\u0000')
     .replace(/['’\-_/.,;:!?()]+/g, ' ')
+    .replace(/\u0000/g, '.')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -171,7 +179,9 @@ export function translateQuery(text: string): string {
       continue;
     }
     const word = words[i]!;
-    if (!STOP_WORDS.has(word)) out.push(word);
+    // « a » devant un chiffre fait partie d'un modèle (« Galaxy A 54 ») : on le garde.
+    const partOfModel = /^\d/.test(words[i + 1] ?? '');
+    if (!STOP_WORDS.has(word) || partOfModel) out.push(word);
     i += 1;
   }
   return out.join(' ');

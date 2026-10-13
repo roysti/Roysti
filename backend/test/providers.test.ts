@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { createCore } from '../src/core/api.js';
 import { nodeRuntime } from '../src/core/nodeRuntime.js';
+import { unitPrice } from '../src/lib/pricing.js';
 import { providerQuery, translateQuery } from '../src/lib/query.js';
 import { CachedProvider } from '../src/providers/cached.js';
 import { ProviderConfigError, providerFromSettings, settingsFromEnv } from '../src/providers/index.js';
@@ -327,8 +328,12 @@ describe('adaptateur TMAPI', () => {
     assert.equal(new URL(detailCall).origin, 'https://api.tmapi.io');
     assert.deepEqual(query(detailCall), { apiToken: 'tok', item_id: '800000000003', language: 'zh' });
     assert.equal(p.title, '女式长款睡袍');
-    assert.equal(p.price, 25.9, 'palier le plus bas');
-    assert.equal(p.priceMax, 29.89);
+    assert.equal(p.price, 29.89, 'prix à l’unité des SKU ; les paliers s’appliquent ensuite');
+    assert.equal(p.priceMax, undefined);
+    assert.deepEqual(
+      [2, 100, 300].map((q) => unitPrice(p, p.skus[0], q)),
+      [29.89, 27.6, 25.9],
+    );
     assert.equal(p.moq, 2);
     assert.equal(p.priceTiers?.length, 3);
     assert.equal(p.stock, 5000);
@@ -385,6 +390,11 @@ describe('adaptateur TMAPI', () => {
     );
     assert.deepEqual([r.total, r.hasMore, r.pageSize], [2000, true, 20]);
     await assert.rejects(provider.search(params({ platform: 'taobao' })), (e: ProviderError) => e.status === 400);
+  });
+
+  it('une page 404 sans enveloppe JSON est une erreur, pas un article introuvable', async () => {
+    const fetcher = (async () => new Response('<html>Not Found</html>', { status: 404 })) as unknown as typeof fetch;
+    await assert.rejects(new TmapiProvider({ token: 't', fetcher }).getProduct('1688', '1234'), (e: ProviderError) => e.status === 502);
   });
 
   it('réessaie une fois sur 417/499 et traduit les erreurs connues', async () => {
@@ -506,6 +516,35 @@ describe('adaptateur OTAPI (RapidAPI)', () => {
     assert.deepEqual([r.total, r.hasMore], [500, true]);
   });
 
+  it('« Toutes les plateformes » bascule sur 1688 quand la clé n’est abonnée qu’à « Otapi 1688 »', async () => {
+    const content = [{ Id: 'abb-800000000003', Title: 'Mug', Price: { OriginalPrice: 3.5 } }];
+    const { fetcher, calls } = fakeFetch((url) =>
+      url.includes('taobao-tmall1') ? { status: 403, body: { message: 'You are not subscribed to this API.' } } : { body: { ErrorCode: 'Ok', Result: { Items: { Items: { Content: content, TotalCount: 1 } } } } },
+    );
+    const provider = new OtapiProvider({ rapidApiKey: 'rk', fetcher });
+    const r = await provider.search(params());
+    assert.equal(r.items[0]?.id, '1688:800000000003');
+    await provider.search(params({ q: 'autre' }));
+    assert.equal(calls.filter((c) => c.includes('taobao-tmall1')).length, 1, 'Taobao n’est plus retenté');
+    const none = fakeFetch(() => ({ status: 403, body: {} })).fetcher;
+    await assert.rejects(new OtapiProvider({ rapidApiKey: 'rk', fetcher: none }).search(params()), /« Taobao Tmall » et\/ou « Otapi 1688 »/);
+  });
+
+  it('avec un filtre de prix, lit jusqu’à 3 pages pour ne pas renvoyer une page vide', async () => {
+    const frame = (pos: number) =>
+      pos === 0
+        ? [{ Id: '700000000021', Title: 'cher', Price: { OriginalPrice: 500 } }]
+        : [{ Id: '700000000022', Title: 'abordable', Price: { OriginalPrice: 40 } }];
+    const { fetcher, calls } = fakeFetch((url) => {
+      const pos = Number(new URL(url).searchParams.get('framePosition'));
+      return { body: { ErrorCode: 'Ok', Result: { Items: { Items: { Content: frame(pos), TotalCount: 100 } } } } };
+    });
+    const r = await new OtapiProvider({ rapidApiKey: 'rk', fetcher }).search(params({ maxPrice: 100, pageSize: 1 }));
+    assert.deepEqual(r.items.map((i) => i.title), ['abordable']);
+    assert.equal(r.page, 2, 'la page suivante reprend après la dernière page lue');
+    assert.equal(calls.length, 2);
+  });
+
   it('explique les erreurs RapidAPI et OTAPI', async () => {
     const forbidden = fakeFetch(() => ({ status: 403, body: { message: 'You are not subscribed to this API.' } })).fetcher;
     await assert.rejects(new OtapiProvider({ rapidApiKey: 'rk', fetcher: forbidden }).search(params()), (e: ProviderError) => e.status === 401 && /abonnez-vous/.test(e.message));
@@ -564,6 +603,19 @@ describe('cache des fournisseurs payants', () => {
     assert.equal(inner.calls, 5);
   });
 
+  it('relit la fiche sans cache au paiement (cache=no chez Onebound)', async () => {
+    const { fetcher, calls } = fakeFetch(() => ({ body: ONEBOUND_TAOBAO }));
+    const cached = new CachedProvider(new OneboundProvider({ key: 'k', secret: 's', fetcher }));
+    await cached.getProduct('taobao', '700000000001');
+    await cached.getProduct('taobao', '700000000001');
+    assert.equal(calls.length, 1);
+    await cached.getProduct('taobao', '700000000001', { fresh: true });
+    assert.equal(calls.length, 2);
+    assert.equal(query(calls[1]!).cache, 'no');
+    await cached.getProduct('taobao', '700000000001');
+    assert.equal(calls.length, 2, 'la relecture fraîche alimente le cache');
+  });
+
   it('limite le nombre d’entrées', async () => {
     const cached = new CachedProvider(new CountingProvider(), { maxEntries: 2 });
     for (const q of ['a', 'b', 'c']) await cached.search(params({ q }));
@@ -580,6 +632,9 @@ describe('mots-clés envoyés aux plateformes chinoises', () => {
     assert.equal(translateQuery('écouteurs sans fil'), '耳机 无线');
     assert.equal(translateQuery('连衣裙 夏'), '连衣裙 夏', 'le chinois passe tel quel');
     assert.equal(translateQuery('  '), '');
+    assert.equal(translateQuery('câble 3.5mm'), '数据线 3.5mm', 'décimales gardées');
+    assert.equal(translateQuery('Galaxy A 54 coque'), 'galaxy a 54 手机壳', 'modèle gardé');
+    assert.equal(translateQuery('casque moto'), '摩托车头盔');
   });
 
   it('ajoute le mot-clé de la catégorie et cherche les meilleures ventes par défaut', () => {
@@ -610,7 +665,7 @@ describe('fournisseur réel dans le cœur de l’API', () => {
     const ok = await core.handle({ method: 'GET', path: '/provider/test' });
     assert.equal(ok.status, 200);
     assert.equal((ok.body as { ok: boolean }).ok, true);
-    assert.equal(inner.lastSearch?.platform, 'taobao');
+    assert.equal(inner.lastSearch?.platform, undefined, 'plateforme par défaut du fournisseur');
     inner.fail = true;
     const ko = await core.handle({ method: 'GET', path: '/provider/test' });
     assert.equal(ko.status, 429);

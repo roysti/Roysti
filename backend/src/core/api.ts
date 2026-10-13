@@ -39,6 +39,8 @@ export interface ApiRequest {
   body?: unknown;
   /** Jeton de session (en-tête Authorization: Bearer …). */
   token?: string;
+  /** Identifiant du client (adresse IP côté serveur) pour limiter les envois de codes. */
+  clientId?: string;
 }
 
 export interface ApiResponse {
@@ -86,6 +88,7 @@ interface Context {
   query: Record<string, unknown>;
   body: unknown;
   token?: string;
+  clientId?: string;
   /** Défini pour les routes authentifiées. */
   user: User;
 }
@@ -254,9 +257,9 @@ const ROUTES: Route[] = [
     handler: async ({ core }) => {
       const provider = core.provider;
       if (provider.isDemo) return { ok: true, provider: provider.name, isDemoData: true, message: 'Catalogue de démonstration : aucune clé nécessaire.' };
-      // Un seul appel (facturé) : une petite recherche sur la première plateforme couverte.
-      const platform = provider.platforms[0];
-      const result = await provider.search({ q: '手机壳', platform, page: 1, pageSize: 1, sort: 'default' });
+      // Une petite recherche (un appel facturé) sur la plateforme par défaut du fournisseur ;
+      // OTAPI bascule sur 1688 si la clé n'est abonnée qu'à « Otapi 1688 ».
+      const result = await provider.search({ q: '手机壳', page: 1, pageSize: 1, sort: 'default' });
       const sample = result.items[0];
       return {
         ok: true,
@@ -274,7 +277,7 @@ const ROUTES: Route[] = [
       const provider = core.provider;
       if (provider instanceof MockProvider) return { items: featuredFrom(provider.all()), provider: provider.name, isDemoData: true };
       // Avec un vrai fournisseur, la page d'accueil affiche une recherche « tendance ».
-      const result = await provider.search({ q: env('FEATURED_QUERY') ?? '热销', platform: provider.platforms[0], page: 1, pageSize: 20, sort: 'sales' });
+      const result = await provider.search({ q: env('FEATURED_QUERY') ?? '热销', page: 1, pageSize: 20, sort: 'sales' });
       return { items: result.items, provider: provider.name, isDemoData: false };
     },
   },
@@ -315,7 +318,11 @@ const ROUTES: Route[] = [
     method: 'GET',
     path: '/auth/config',
     handler: ({ core }) => ({
-      channels: { email: { demo: core.auth.senderIsDemo('email') }, sms: { demo: core.auth.senderIsDemo('sms') } },
+      // available = false : canal non configuré hors mode démo (connexion par mot de passe seulement).
+      channels: {
+        email: { demo: core.auth.senderIsDemo('email'), available: core.auth.channelAvailable('email') },
+        sms: { demo: core.auth.senderIsDemo('sms'), available: core.auth.channelAvailable('sms') },
+      },
       otp: { length: OTP_RULES.length, ttlSec: OTP_RULES.ttlMs / 1000, resendSec: OTP_RULES.resendMs / 1000 },
       passwordMinLength: 8,
     }),
@@ -324,14 +331,14 @@ const ROUTES: Route[] = [
     method: 'POST',
     path: '/auth/register',
     status: 201,
-    handler: async ({ core, body }) => {
+    handler: async ({ core, body, clientId }) => {
       const input = parse(registerSchema, body);
       const { user, token } = core.auth.register(input);
       // Code de vérification envoyé tout de suite (téléphone en priorité).
       const channel = user.phone ? 'sms' : 'email';
       let verification: Awaited<ReturnType<AuthService['requestOtp']>> | undefined;
       try {
-        verification = await core.auth.requestOtp({ channel, destination: (user.phone ?? user.email)! }, 'verify', user.id);
+        verification = await core.auth.requestOtp({ channel, destination: (user.phone ?? user.email)! }, 'verify', { userId: user.id, clientId });
       } catch {
         verification = undefined; // le compte reste utilisable ; la vérification pourra être relancée
       }
@@ -350,10 +357,10 @@ const ROUTES: Route[] = [
   {
     method: 'POST',
     path: '/auth/otp/request',
-    handler: ({ core, body, token }) => {
-      const input = parse(otpTargetSchema.extend({ purpose: z.enum(['login', 'verify', 'reset']) }), body);
+    handler: ({ core, body, token, clientId }) => {
+      const input = parse(otpTargetSchema.extend({ purpose: z.enum(['login', 'verify', 'reset']), currentPassword: z.string().max(200).optional() }), body);
       const user = input.purpose === 'verify' ? core.accounts.userForToken(token) : undefined;
-      return core.auth.requestOtp(input, input.purpose, user?.id);
+      return core.auth.requestOtp(input, input.purpose, { userId: user?.id, currentPassword: input.currentPassword, clientId });
     },
   },
   {
@@ -378,9 +385,9 @@ const ROUTES: Route[] = [
     method: 'POST',
     path: '/me/verify',
     auth: true,
-    handler: ({ core, user, body }) => {
+    handler: ({ core, user, body, token }) => {
       const input = parse(otpTargetSchema.extend({ code: otpCodeSchema }), body);
-      return { user: publicUser(core.auth.verifyIdentifier(user.id, input, input.code)) };
+      return { user: publicUser(core.auth.verifyIdentifier(user.id, input, input.code, token)) };
     },
   },
   {
@@ -719,7 +726,11 @@ const errorBody = (message: string, code?: string) => ({ error: message, code })
 
 export function createCore(options: CoreOptions): Core {
   const accounts = new AccountService(options.store, options.runtime);
-  const auth = new AuthService(options.store, options.runtime, accounts, options.senders ?? demoSenders());
+  const demoMode = options.demoMode ?? config.demoMode;
+  const auth = new AuthService(options.store, options.runtime, accounts, options.senders ?? demoSenders(), {
+    demoMode,
+    globalHourlyLimit: Number(env('OTP_GLOBAL_HOURLY_LIMIT') ?? 300) || undefined,
+  });
   const shop = new ShopService(options.store, options.provider, accounts);
   if (options.seed ?? true) seedDemo(options.store, auth, config.demoStartingBalance);
 
@@ -729,7 +740,7 @@ export function createCore(options: CoreOptions): Core {
     accounts,
     auth,
     shop,
-    demoMode: options.demoMode ?? config.demoMode,
+    demoMode,
     async handle(request) {
       try {
         const found = match(request.method, request.path);
@@ -747,6 +758,7 @@ export function createCore(options: CoreOptions): Core {
           query: request.query ?? {},
           body: request.body,
           token: request.token,
+          clientId: request.clientId,
           user: user as User,
         });
         if (body === undefined) return { status: 204 };

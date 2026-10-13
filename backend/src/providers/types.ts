@@ -10,7 +10,12 @@ export interface ProductProvider {
   readonly isDemo: boolean;
   readonly platforms: readonly Platform[];
   search(params: SearchParams): Promise<SearchResult>;
-  getProduct(platform: Platform, itemId: string): Promise<ProductDetail | null>;
+  /** `fresh` : données à jour exigées (paiement) — pas de cache, ni chez nous ni chez le fournisseur. */
+  getProduct(platform: Platform, itemId: string, options?: GetProductOptions): Promise<ProductDetail | null>;
+}
+
+export interface GetProductOptions {
+  fresh?: boolean;
 }
 
 export class ProviderError extends Error {

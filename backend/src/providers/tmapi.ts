@@ -100,9 +100,12 @@ function mapTiers(data: Json): PriceTier[] | undefined {
 export function mapTmapiItem(platform: Platform, itemId: string, data: Json, descriptionImages: string[] = []): ProductDetail {
   const priceInfo = obj(data.price_info);
   const basePrice = num(priceInfo.price_min, num(priceInfo.price));
-  const skus = mapSkuList(data.skus, basePrice);
   const priceTiers = platform === '1688' ? mapTiers(data) : undefined;
-  const prices = [...skus.map((s) => s.price), ...(priceTiers ?? []).map((t) => t.price)].filter((p) => p > 0);
+  // Prix de référence = prix à l'unité des SKU (premier palier) : unitPrice() y applique ensuite
+  // l'écart du palier atteint. Y mêler les paliers compterait la remise deux fois.
+  const skus = mapSkuList(data.skus, priceTiers?.[0]?.price ?? basePrice);
+  const skuPrices = skus.map((s) => s.price).filter((p) => p > 0);
+  const prices = skuPrices.length ? skuPrices : (priceTiers ?? []).map((t) => t.price);
   const price = prices.length ? Math.min(...prices) : basePrice;
   const maxPrice = prices.length ? Math.max(...prices) : num(priceInfo.price_max, price);
   const images = arr(data.main_imgs).map(normalizeImageUrl).filter(Boolean);
@@ -201,7 +204,10 @@ export class TmapiProvider implements ProductProvider {
     } catch {
       if (res.ok) throw new ProviderError('Réponse TMAPI illisible');
     }
-    const code = num(json.code, res.ok ? 200 : res.status);
+    // Seul un code 404 dans l'enveloppe JSON signifie « article introuvable » ; une page 404
+    // sans enveloppe (mauvaise URL de base, proxy) est une erreur, jamais mise en cache.
+    if (json.code === undefined && !res.ok) throw new ProviderError(`TMAPI indisponible (HTTP ${res.status})`, res.status === 401 || res.status === 403 ? 401 : 502);
+    const code = num(json.code, 200);
     if (code === 200) return obj(json.data);
     if (code === 404) return null;
     if (RETRYABLE.has(code) && attempt === 1) return this.call(path, params, 2);

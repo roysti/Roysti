@@ -1,5 +1,5 @@
 import type { Platform, ProductDetail, SearchParams, SearchResult } from '../types.js';
-import type { ProductProvider } from './types.js';
+import type { GetProductOptions, ProductProvider } from './types.js';
 
 interface Entry<T> {
   value: Promise<T>;
@@ -85,8 +85,11 @@ export class CachedProvider implements ProductProvider {
     return this.remember(key, this.searchTtlMs, () => this.inner.search(params));
   }
 
-  getProduct(platform: Platform, itemId: string): Promise<ProductDetail | null> {
-    return this.remember(`p:${platform}:${itemId}`, this.productTtlMs, () => this.inner.getProduct(platform, itemId));
+  getProduct(platform: Platform, itemId: string, options?: GetProductOptions): Promise<ProductDetail | null> {
+    const key = `p:${platform}:${itemId}`;
+    // Au paiement : appel direct au fournisseur, dont le résultat remplace l'entrée du cache.
+    if (options?.fresh) this.entries.delete(key);
+    return this.remember(key, this.productTtlMs, () => this.inner.getProduct(platform, itemId, options));
   }
 
   clear() {

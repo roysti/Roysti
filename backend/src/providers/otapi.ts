@@ -243,39 +243,69 @@ export class OtapiProvider implements ProductProvider {
     return mapOtapiItem(platform, itemId, item);
   }
 
+  /** Vrai quand la clé a été refusée par l'API « Taobao Tmall » (abonnement à « Otapi 1688 » seul). */
+  private taobaoRefused = false;
+
   async search(params: SearchParams): Promise<SearchResult> {
-    const platform = params.platform ?? 'taobao';
-    if (!this.platforms.includes(platform)) throw new ProviderError(`OTAPI ne couvre pas ${platform} (Taobao, Tmall et 1688 seulement).`, 400);
+    if (params.platform) {
+      if (!this.platforms.includes(params.platform)) throw new ProviderError(`OTAPI ne couvre pas ${params.platform} (Taobao, Tmall et 1688 seulement).`, 400);
+      return this.searchOn(params.platform, params);
+    }
+    // « Toutes les plateformes » : Taobao/Tmall, ou 1688 si la clé n'est abonnée qu'à « Otapi 1688 ».
+    if (this.taobaoRefused) return this.searchOn('1688', params);
+    try {
+      return await this.searchOn('taobao', params);
+    } catch (err) {
+      if (!(err instanceof ProviderError) || err.status !== 401) throw err;
+      try {
+        const result = await this.searchOn('1688', params);
+        this.taobaoRefused = true;
+        return result;
+      } catch (err1688) {
+        if (err1688 instanceof ProviderError && err1688.status === 401) {
+          throw new ProviderError('Clé RapidAPI refusée ou abonnement manquant : abonnez-vous à « Taobao Tmall » et/ou « Otapi 1688 » (OpenTrade Commerce) sur RapidAPI.', 401);
+        }
+        throw err1688;
+      }
+    }
+  }
+
+  private async searchOn(platform: Platform, params: SearchParams): Promise<SearchResult> {
     const { key } = this.host(platform);
     const pageSize = Math.min(params.pageSize, 50);
-    const framePosition = (params.page - 1) * pageSize;
-    // Seuls Default et Popularity:Desc sont attestés pour OrderBy ; les tris et filtres de prix
-    // (dont la devise n'est pas documentée) sont appliqués ici, sur la page reçue.
-    const result = await this.call(platform, 'BatchSearchItemsFrame', {
-      framePosition,
-      frameSize: pageSize,
-      ItemTitle: params.q,
-      OrderBy: params.sort === 'sales' ? 'Popularity:Desc' : undefined,
-    });
-    const page = obj(obj(result?.Items).Items);
-    let items = arr(page.Content)
-      .map((i) => mapOtapiSearchItem(key, i))
-      .filter((i): i is ProductSummary => i !== null);
-    const fetched = items.length;
-    if (params.minPrice !== undefined) items = items.filter((i) => i.price >= params.minPrice!);
-    if (params.maxPrice !== undefined) items = items.filter((i) => i.price <= params.maxPrice!);
-    if (params.sort === 'price_asc') items.sort((a, b) => a.price - b.price);
-    if (params.sort === 'price_desc') items.sort((a, b) => b.price - a.price);
-    const total = num(page.TotalCount, items.length);
-    const maxPages = num(obj(result?.Items).MaximumPageCount, 0);
-    return {
-      items,
-      page: params.page,
-      pageSize,
-      total,
-      hasMore: fetched > 0 && framePosition + fetched < total && (!maxPages || params.page < maxPages),
-      provider: this.name,
-      isDemoData: false,
-    };
+    // Seuls Default et Popularity:Desc sont attestés pour OrderBy, et la devise des filtres de prix
+    // n'est pas documentée : tri et filtres de prix sont appliqués ici, sur les articles reçus.
+    // Avec un filtre de prix, jusqu'à 3 pages sont lues pour ne pas renvoyer une page vide ;
+    // `page` indique alors la dernière page lue, et la suivante reprend après elle.
+    const filtering = params.minPrice !== undefined || params.maxPrice !== undefined;
+    const maxFrames = filtering ? 3 : 1;
+    let page = params.page;
+    let items: ProductSummary[] = [];
+    let total = 0;
+    let hasMore = false;
+    for (let i = 0; i < maxFrames; i++) {
+      const framePosition = (page - 1) * pageSize;
+      const result = await this.call(platform, 'BatchSearchItemsFrame', {
+        framePosition,
+        frameSize: pageSize,
+        ItemTitle: params.q,
+        OrderBy: params.sort === 'sales' ? 'Popularity:Desc' : undefined,
+      });
+      const frame = obj(obj(result?.Items).Items);
+      const fetched = arr(frame.Content)
+        .map((raw) => mapOtapiSearchItem(key, raw))
+        .filter((x): x is ProductSummary => x !== null);
+      total = num(frame.TotalCount, fetched.length);
+      const maxPages = num(obj(result?.Items).MaximumPageCount, 0);
+      hasMore = fetched.length > 0 && framePosition + fetched.length < total && (!maxPages || page < maxPages);
+      items.push(
+        ...fetched.filter((x) => (params.minPrice === undefined || x.price >= params.minPrice) && (params.maxPrice === undefined || x.price <= params.maxPrice)),
+      );
+      if (items.length || !hasMore || i === maxFrames - 1) break;
+      page += 1;
+    }
+    if (params.sort === 'price_asc') items = items.sort((a, b) => a.price - b.price);
+    if (params.sort === 'price_desc') items = items.sort((a, b) => b.price - a.price);
+    return { items, page, pageSize, total, hasMore, provider: this.name, isDemoData: false };
   }
 }

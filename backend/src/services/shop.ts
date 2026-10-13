@@ -87,13 +87,13 @@ export class ShopService {
    * pour `quantity`, et renvoie le prix unitaire applicable (paliers de gros compris).
    * Le prix n'est jamais repris du client ni d'un calcul antérieur.
    */
-  private async priceFor(platform: Platform, itemId: string, selection: Record<string, string>, quantity: number, origin?: string) {
+  private async priceFor(platform: Platform, itemId: string, selection: Record<string, string>, quantity: number, origin?: string, fresh = false) {
     // Un article ajouté depuis une autre source (ex. catalogue de démo avant de brancher une API)
     // ne doit pas être repricé avec un article réel qui porterait le même identifiant.
     if (origin !== undefined && origin !== this.provider.name) {
       throw badRequest('La source des articles a changé depuis l’ajout au panier : retirez cet article puis ajoutez-le à nouveau', 'provider_changed');
     }
-    const product = await this.provider.getProduct(platform, itemId);
+    const product = await this.provider.getProduct(platform, itemId, { fresh });
     if (!product) throw notFound('Article');
     const sku = findSku(product, selection);
     if (product.props.length && !sku) throw badRequest('Veuillez choisir toutes les options (couleur, taille…)');
@@ -102,8 +102,9 @@ export class ShopService {
     if (quantity > stock) throw badRequest(`Stock insuffisant (${stock} disponibles)`);
     if (product.moq && quantity < product.moq) throw badRequest(`Quantité minimum de commande : ${product.moq}`);
     const price = unitPrice(product, sku, quantity);
-    // Prix inconnu chez le fournisseur (renvoyé comme 0 ou -1) : on ne commande jamais à 0 ¥.
-    if (!(price > 0)) throw badRequest('Prix indisponible pour cet article : réessayez plus tard ou contactez le support', 'price_unavailable');
+    // Prix inconnu chez le fournisseur (renvoyé comme 0 ou -1) : on ne commande jamais à 0 ¥
+    // (ni au plancher de 0,01 qu'un palier de gros appliquerait à un prix de base inconnu).
+    if (!((sku?.price ?? product.price) > 0) || !(price > 0)) throw badRequest('Prix indisponible pour cet article : réessayez plus tard ou contactez le support', 'price_unavailable');
     return { product, sku, unitPrice: price };
   }
 
@@ -237,7 +238,8 @@ export class ShopService {
     const snapshot = items.map((item) => ({ item, quantity: item.quantity }));
     for (const item of items) {
       try {
-        const priced = await this.priceFor(item.platform, item.itemId, item.selection, item.quantity, item.provider ?? 'mock');
+        // Au paiement, prix et stock sont relus chez le fournisseur, sans cache.
+        const priced = await this.priceFor(item.platform, item.itemId, item.selection, item.quantity, item.provider ?? 'mock', true);
         item.unitPrice = priced.unitPrice;
         item.domesticShipping = priced.product.domesticShipping;
       } catch (err) {

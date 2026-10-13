@@ -2,6 +2,7 @@ import cors from 'cors';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { config } from './config.js';
 import { createCore } from './core/api.js';
+import { env } from './lib/env.js';
 import { nodeRuntime } from './core/nodeRuntime.js';
 import type { Runtime } from './core/runtime.js';
 import { createSenders, type Senders } from './messaging/index.js';
@@ -40,11 +41,15 @@ export function createApp(options: AppOptions = {}) {
 
   const app = express();
   app.disable('x-powered-by');
+  // Derrière un proxy (Render, Fly, nginx…), TRUST_PROXY permet de lire la vraie adresse IP du client
+  // (limites d'envoi de codes par client). Ex. TRUST_PROXY=1 pour un seul proxy.
+  const trustProxy = env('TRUST_PROXY');
+  if (trustProxy) app.set('trust proxy', /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy);
   app.use(cors());
   app.use(express.json({ limit: '1mb' }));
 
   app.use('/api', async (req, res) => {
-    const result = await core.handle({ method: req.method, path: req.path, query: req.query as Record<string, unknown>, body: req.body, token: bearerToken(req) });
+    const result = await core.handle({ method: req.method, path: req.path, query: req.query as Record<string, unknown>, body: req.body, token: bearerToken(req), clientId: req.ip });
     if (result.body === undefined) res.status(result.status).end();
     else res.status(result.status).json(result.body);
   });

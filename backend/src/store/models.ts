@@ -28,9 +28,13 @@ export interface OtpRecord {
   purpose: OtpPurpose;
   /** Compte concerné (vérification d'un nouvel e-mail/téléphone). */
   userId?: string;
+  /** Client à l'origine de la demande (adresse IP côté serveur), pour limiter les envois. */
+  clientId?: string;
   codeHash: string;
   salt: string;
   attempts: number;
+  /** Essais incorrects (blocage de la destination après trop d'échecs sur 24 h). */
+  failures?: number;
   consumed: boolean;
   createdAt: string;
   expiresAt: string;

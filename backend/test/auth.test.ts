@@ -178,7 +178,7 @@ describe('connexion par code (OTP)', () => {
     const code = sms.sent[0]!.text.match(/\d{6}/)![0];
     assert.equal((await post(core, '/auth/otp/verify', { channel: 'sms', destination: '+261341112233', code })).status, 200);
     const cfg = b(await core.handle({ method: 'GET', path: '/auth/config' }));
-    assert.deepEqual(cfg.channels, { email: { demo: false }, sms: { demo: false } });
+    assert.deepEqual(cfg.channels, { email: { demo: false, available: true }, sms: { demo: false, available: true } });
   });
 
   it('conserve seulement une empreinte du code', async () => {
@@ -234,6 +234,102 @@ describe('mot de passe oublié et gestion du compte', () => {
   });
 });
 
+describe('protections contre le détournement de compte', () => {
+  const register = (core: Core, body: Record<string, unknown>) => post(core, '/auth/register', { password: 'motdepasse-1', ...body });
+  const otpLogin = async (core: Core, channel: string, destination: string) => {
+    ageOtps(core, 61_000);
+    const sent = b(await post(core, '/auth/otp/request', { channel, destination, purpose: 'login' }));
+    return post(core, '/auth/otp/verify', { channel, destination, code: sent.demoCode });
+  };
+
+  it('hors mode démo, un canal non configuré refuse d’envoyer et ne renvoie jamais de code', async () => {
+    const core = createCore({ store: new Store({ uuid: nodeRuntime.uuid }), provider: new MockProvider(), runtime: nodeRuntime, demoMode: false, senders: { sms: new DemoSender('sms'), email: new DemoSender('email') } });
+    const cfg = b(await core.handle({ method: 'GET', path: '/auth/config' })) as unknown as { channels: Record<string, { available: boolean }> };
+    assert.equal(cfg.channels.sms!.available, false);
+    for (const purpose of ['login', 'reset']) {
+      const r = await post(core, '/auth/otp/request', { channel: 'email', destination: 'demo@roysti.app', purpose });
+      assert.equal(r.status, 503);
+      assert.equal(b(r).code, 'channel_unavailable');
+      assert.equal(b(r).demoCode, undefined);
+    }
+    assert.equal(core.store.data.otps.length, 0);
+  });
+
+  it('un compte préparé avec l’e-mail d’autrui passe à son vrai titulaire, sans le mot de passe ni les sessions de l’inscripteur', async () => {
+    const { core } = newCore();
+    const attacker = b(await register(core, { email: 'victime@exemple.com', name: 'Piège' }));
+    const victim = await otpLogin(core, 'email', 'victime@exemple.com');
+    assert.equal(victim.status, 200);
+    assert.equal(b(victim).user!.id, attacker.user!.id);
+    assert.equal(b(victim).user!.hasPassword, false, 'mot de passe de l’inscripteur retiré');
+    assert.equal((await core.handle({ method: 'GET', path: '/me', token: attacker.token })).status, 401, 'session de l’inscripteur fermée');
+    const pwd = await post(core, '/auth/login', { identifier: 'victime@exemple.com', password: 'motdepasse-1' });
+    assert.equal(pwd.status, 401);
+  });
+
+  it('un identifiant non vérifié est détaché d’un compte qui a prouvé posséder un autre identifiant', async () => {
+    const { core } = newCore();
+    const owner = b(await otpLogin(core, 'sms', '+261341112299'));
+    // Le propriétaire du numéro ajoute par erreur l'e-mail de quelqu'un d'autre (jamais vérifié).
+    core.store.data.users.find((u) => u.id === owner.user!.id)!.email = 'autre@exemple.com';
+    const other = await otpLogin(core, 'email', 'autre@exemple.com');
+    assert.equal(b(other).created, true);
+    assert.notEqual(b(other).user!.id, owner.user!.id);
+    assert.equal(core.store.data.users.find((u) => u.id === owner.user!.id)!.email, undefined);
+    assert.equal((await core.handle({ method: 'GET', path: '/me', token: owner.token })).status, 200, 'le propriétaire du numéro garde son compte');
+  });
+
+  it('remplacer un e-mail vérifié exige le mot de passe actuel et ferme les autres sessions', async () => {
+    const { core } = newCore();
+    const login = b(await post(core, '/auth/login', { identifier: 'demo@roysti.app', password: 'demo1234' }));
+    const other = b(await post(core, '/auth/login', { identifier: 'demo@roysti.app', password: 'demo1234' }));
+    const ask = (extra: Record<string, unknown>) => post(core, '/auth/otp/request', { channel: 'email', destination: 'nouveau@exemple.com', purpose: 'verify', ...extra }, login.token);
+    assert.equal(b(await ask({})).code, 'password_required');
+    assert.equal(b(await ask({ currentPassword: 'faux-mot-de-passe' })).code, 'password_required');
+    const sent = b(await ask({ currentPassword: 'demo1234' }));
+    assert.ok(sent.demoCode);
+    const done = await post(core, '/me/verify', { channel: 'email', destination: 'nouveau@exemple.com', code: sent.demoCode }, login.token);
+    assert.equal(done.status, 200);
+    assert.equal((await core.handle({ method: 'GET', path: '/me', token: other.token })).status, 401);
+    assert.equal((await core.handle({ method: 'GET', path: '/me', token: login.token })).status, 200);
+  });
+
+  it('un autre compte ne peut pas annuler le code de vérification en attente', async () => {
+    const { core } = newCore();
+    const a = b(await register(core, { email: 'a@exemple.com' }));
+    const b2 = b(await register(core, { email: 'b@exemple.com' }));
+    ageOtps(core, 61_000);
+    const sentA = b(await post(core, '/auth/otp/request', { channel: 'sms', destination: '+261341112277', purpose: 'verify' }, a.token));
+    ageOtps(core, 61_000);
+    await post(core, '/auth/otp/request', { channel: 'sms', destination: '+261341112277', purpose: 'verify' }, b2.token);
+    const ok = await post(core, '/me/verify', { channel: 'sms', destination: '+261341112277', code: sentA.demoCode }, a.token);
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  });
+
+  it('limite les envois par client et bloque une adresse après trop d’essais ratés', async () => {
+    const { core } = newCore();
+    for (let i = 0; i < 10; i++) {
+      const r = await core.handle({ method: 'POST', path: '/auth/otp/request', body: { channel: 'email', destination: `x${i}@exemple.com`, purpose: 'login' }, clientId: '203.0.113.7' });
+      assert.equal(r.status, 200);
+    }
+    const blocked = await core.handle({ method: 'POST', path: '/auth/otp/request', body: { channel: 'email', destination: 'x99@exemple.com', purpose: 'login' }, clientId: '203.0.113.7' });
+    assert.equal(blocked.status, 429);
+    const elsewhere = await core.handle({ method: 'POST', path: '/auth/otp/request', body: { channel: 'email', destination: 'x99@exemple.com', purpose: 'login' }, clientId: '198.51.100.2' });
+    assert.equal(elsewhere.status, 200);
+
+    const target = { channel: 'email', destination: 'cible@exemple.com' };
+    for (let round = 0; round < 4; round++) {
+      ageOtps(core, 61_000);
+      const sent = b(await post(core, '/auth/otp/request', { ...target, purpose: 'login' }));
+      const wrong = sent.demoCode === '999999' ? '000000' : '999999';
+      for (let i = 0; i < 5; i++) await post(core, '/auth/otp/verify', { ...target, code: wrong });
+    }
+    ageOtps(core, 2 * 60 * 60_000);
+    const locked = await post(core, '/auth/otp/request', { ...target, purpose: 'login' });
+    assert.equal(locked.status, 429, 'bloqué après 20 essais ratés en 24 h');
+  });
+});
+
 describe('expéditeurs SMS et e-mail', () => {
   it('Twilio : URL, authentification Basic et formulaire', async () => {
     let captured: { url: string; init: RequestInit } | undefined;
@@ -269,6 +365,7 @@ describe('expéditeurs SMS et e-mail', () => {
     const core = createCore({ store: new Store({ uuid: nodeRuntime.uuid }), provider: new MockProvider(), runtime: nodeRuntime, senders: { sms: failing, email: new DemoSender('email') } });
     const res = await post(core, '/auth/otp/request', { channel: 'sms', destination: '+261341234567', purpose: 'login' });
     assert.equal(res.status, 502);
+    assert.ok(!b(res).error!.includes('panne'), 'le détail du prestataire reste côté serveur');
     assert.ok(core.store.data.otps.every((o) => o.consumed));
   });
 });
