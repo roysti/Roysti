@@ -39,6 +39,7 @@ function Cart() {
   });
   const remove = useMutation({
     mutationFn: (id: string) => api(`/cart/${id}`, { method: 'DELETE' }),
+    onMutate: () => setError(null),
     onSuccess: refresh,
     onError: (e) => setError(errorMessage(e)),
   });
@@ -66,7 +67,15 @@ function Cart() {
 
   return (
     <View style={styles.screen}>
-      <ScrollView contentContainerStyle={styles.list} refreshControl={<RefreshControl refreshing={cart.isRefetching} onRefresh={() => cart.refetch()} />}>
+      <ScrollView contentContainerStyle={styles.list} refreshControl={
+          <RefreshControl
+            refreshing={cart.isRefetching}
+            onRefresh={() => {
+              setError(null);
+              cart.refetch();
+            }}
+          />
+        }>
         {error ? <Notice tone="danger">{error}</Notice> : null}
         {groups.map((group) => {
           const ids = group.items.map((i) => i.id);

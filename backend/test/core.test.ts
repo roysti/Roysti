@@ -186,3 +186,28 @@ describe('notifications bornées', () => {
     assert.equal(mine[0]!.title, 'n249');
   });
 });
+
+describe('checkout avec un fournisseur lent (type API réelle)', () => {
+  it('deux commandes simultanées du même panier n’en créent qu’une', async () => {
+    const runtime = fakeRuntime();
+    const mock = new MockProvider();
+    // Fournisseur qui répond en 20 ms, comme une passerelle réseau.
+    const slow = Object.assign(Object.create(mock) as MockProvider, {
+      getProduct: async (...args: Parameters<MockProvider['getProduct']>) => {
+        await new Promise((r) => setTimeout(r, 20));
+        return mock.getProduct(...args);
+      },
+    });
+    const core = createCore({ store: new Store({ uuid: runtime.uuid }), provider: slow, runtime, demoMode: true });
+    const { token } = (await core.handle({ method: 'POST', path: '/auth/login', body: { email: 'demo@roysti.app', password: 'demo1234' } })).body as { token: string };
+    const search = (await core.handle({ method: 'GET', path: '/products/search', query: { q: 'montre', platform: 'taobao' } })).body as { items: { itemId: string }[] };
+    const product = (await core.handle({ method: 'GET', path: `/products/taobao/${search.items[0]!.itemId}` })).body as { skus: { props: Record<string, string>; stock: number }[] };
+    const sku = product.skus.find((s) => s.stock > 0)!;
+    const { id } = (await core.handle({ method: 'POST', path: '/cart', token, body: { platform: 'taobao', itemId: search.items[0]!.itemId, selection: sku.props, quantity: 1 } })).body as { id: string };
+
+    const results = await Promise.all([1, 2].map(() => core.handle({ method: 'POST', path: '/orders/checkout', token, body: { cartItemIds: [id] } })));
+    const statuses = results.map((r) => r.status).sort();
+    assert.deepEqual(statuses, [201, 409], JSON.stringify(results.map((r) => r.body)));
+    assert.equal(core.store.data.orders.length, 1);
+  });
+});

@@ -161,13 +161,17 @@ export function Field({ label, ...props }: TextInputProps & { label: string }) {
 }
 
 export function QuantityStepper({ value, onChange, min = 1, max = 99999 }: { value: number; onChange: (v: number) => void; min?: number; max?: number }) {
+  // N'émet que de vrais changements (pas de requête inutile aux bornes).
+  const change = (next: number) => {
+    if (next !== value) onChange(next);
+  };
   return (
     <View style={styles.stepper}>
-      <Pressable accessibilityLabel="Diminuer" onPress={() => onChange(Math.max(min, value - 1))} style={styles.stepperBtn}>
+      <Pressable accessibilityLabel="Diminuer" onPress={() => change(Math.max(min, value - 1))} style={styles.stepperBtn}>
         <Ionicons name="remove" size={16} color={value <= min ? colors.textMuted : colors.text} />
       </Pressable>
       <Text style={styles.stepperValue}>{value}</Text>
-      <Pressable accessibilityLabel="Augmenter" onPress={() => onChange(Math.min(max, value + 1))} style={styles.stepperBtn}>
+      <Pressable accessibilityLabel="Augmenter" onPress={() => change(Math.min(max, value + 1))} style={styles.stepperBtn}>
         <Ionicons name="add" size={16} color={value >= max ? colors.textMuted : colors.text} />
       </Pressable>
     </View>

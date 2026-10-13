@@ -29,7 +29,7 @@ export default function OrdersScreen() {
 }
 
 function Orders() {
-  const params = useLocalSearchParams<{ status?: string; paid?: string }>();
+  const params = useLocalSearchParams<{ status?: string; paid?: string; repriced?: string }>();
   const [filter, setFilter] = useState(params.status ?? 'all');
   const [error, setError] = useState<string | null>(null);
   const queryClient = useQueryClient();
@@ -65,6 +65,9 @@ function Orders() {
           ListHeaderComponent={
             <View style={{ gap: spacing.sm }}>
               {params.paid ? <Notice tone="success">Paiement reçu ! Nos acheteurs passent commande auprès des vendeurs.</Notice> : null}
+              {params.repriced ? (
+                <Notice tone="warning">Le vendeur a modifié un prix ou le port : vérifiez le nouveau montant avant de payer votre commande.</Notice>
+              ) : null}
               {error ? <Notice tone="danger">{error}</Notice> : null}
             </View>
           }

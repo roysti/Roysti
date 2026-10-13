@@ -225,6 +225,7 @@ export class ShopService {
     const items = this.data.cart.filter((c) => c.userId === userId && cartItemIds.includes(c.id));
     if (!items.length) throw badRequest('Aucun article sélectionné');
     // Prix, port et disponibilité réactualisés au moment de commander.
+    const snapshot = items.map((item) => ({ item, quantity: item.quantity }));
     for (const item of items) {
       try {
         const priced = await this.priceFor(item.platform, item.itemId, item.selection, item.quantity);
@@ -234,6 +235,11 @@ export class ShopService {
         if (err instanceof HttpError) throw new HttpError(err.status, `« ${item.title} » : ${err.message}`, err.code);
         throw err;
       }
+    }
+    // Avec un fournisseur réel, les appels ci-dessus prennent du temps : le panier a pu être
+    // commandé ou modifié entre-temps par une autre requête. On refuse plutôt que de commander deux fois.
+    if (snapshot.some(({ item, quantity }) => !this.data.cart.includes(item) || item.quantity !== quantity)) {
+      throw new HttpError(409, 'Le panier a changé pendant la commande : vérifiez-le puis réessayez', 'cart_changed');
     }
     const groups = this.groupByShop(items).map((g) => ({ ...g, totals: this.orderTotals(g.platform, g.items) }));
     const grandTotal = groups.reduce((s, g) => s + g.totals.itemsTotal, 0);

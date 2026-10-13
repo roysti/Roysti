@@ -12,6 +12,8 @@ import { formatCny, useMoney } from '@/lib/money';
 import { useMe, useMeta } from '@/lib/session';
 import type { CartGroup, Order } from '@/lib/types';
 
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
 export default function CheckoutScreen() {
   const { ids = '' } = useLocalSearchParams<{ ids: string }>();
   const selected = ids.split(',').filter(Boolean);
@@ -32,13 +34,14 @@ export default function CheckoutScreen() {
     .filter((g) => g.items.length);
   // Même calcul que le serveur (qui fait foi) : une commande par vendeur, port = le plus élevé du vendeur.
   const servicePrice = (id: string) => meta.data?.valueAddedServices.find((v) => v.id === id)?.price ?? 0;
+  // Arrondis par vendeur, comme le serveur, pour pouvoir comparer les totaux au centime près.
   const totals = groups.reduce(
     (acc, g) => {
-      const items = g.items.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
+      const items = round2(g.items.reduce((s, i) => s + i.unitPrice * i.quantity, 0));
       acc.items += items;
-      acc.domestic += Math.max(0, ...g.items.map((i) => i.domesticShipping));
-      acc.fee += items * (meta.data?.fees.serviceFeeRate[g.platform] ?? 0);
-      acc.services += g.items.reduce((s, i) => s + i.services.reduce((a, id) => a + servicePrice(id), 0), 0);
+      acc.domestic += round2(Math.max(0, ...g.items.map((i) => i.domesticShipping)));
+      acc.fee += round2(items * (meta.data?.fees.serviceFeeRate[g.platform] ?? 0));
+      acc.services += round2(g.items.reduce((s, i) => s + i.services.reduce((a, id) => a + servicePrice(id), 0), 0));
       return acc;
     },
     { items: 0, domestic: 0, fee: 0, services: 0 },
@@ -52,6 +55,14 @@ export default function CheckoutScreen() {
     let orders: Order[] = [];
     try {
       orders = await api<Order[]>('/orders/checkout', { body: { cartItemIds: selected, couponCode: coupon.trim() || undefined } });
+      // Le serveur réactualise les prix chez le vendeur : si le total a changé, on ne paie pas
+      // sans que le client ait vu le nouveau montant.
+      const serverTotal = orders.reduce((s, o) => s + o.total + o.discount, 0);
+      if (Math.abs(serverTotal - total) > 0.01) {
+        await queryClient.invalidateQueries();
+        router.replace({ pathname: '/orders', params: { status: 'pending_payment', repriced: '1' } });
+        return;
+      }
       await api('/orders/pay', { body: { orderIds: orders.map((o) => o.id) } });
       await queryClient.invalidateQueries();
       router.replace({ pathname: '/orders', params: { paid: '1' } });
