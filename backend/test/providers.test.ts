@@ -7,6 +7,7 @@ import { CachedProvider } from '../src/providers/cached.js';
 import { ProviderConfigError, providerFromSettings, settingsFromEnv } from '../src/providers/index.js';
 import { MockProvider } from '../src/providers/mock.js';
 import { OneboundProvider } from '../src/providers/onebound.js';
+import { OtapiProvider, fixOtapiImage } from '../src/providers/otapi.js';
 import { TmapiProvider } from '../src/providers/tmapi.js';
 import { ProviderError, type ProductProvider } from '../src/providers/types.js';
 import { Store } from '../src/store/db.js';
@@ -172,6 +173,52 @@ describe('adaptateur Onebound (format des réponses réelles)', () => {
     assert.equal(p.price, 14.5, 'prix des SKU (le palier le plus bas exige 50 000 pièces)');
     assert.equal(p.stock, 499980);
     assert.equal(p.props[0]?.values[0]?.image, undefined);
+  });
+
+  it('filtre le pixel de suivi, ignore les prix -1 et le port vide', async () => {
+    const item = {
+      ...ONEBOUND_TAOBAO.item,
+      price: '-1',
+      post_fee: '',
+      express_fee: '',
+      ems_fee: '',
+      skus: { sku: [] },
+      props_list: {},
+      props_name: '',
+      desc_img: ['https://img.alicdn.com/imgextra/d1.jpg', 'https://www.o0b.cn/i.php?t.png&rid=gw-1&p=1'],
+    };
+    const { fetcher } = fakeFetch(() => ({ body: { ...ONEBOUND_TAOBAO, item } }));
+    const p = (await new OneboundProvider({ key: 'k', secret: 's', fetcher }).getProduct('taobao', '700000000001'))!;
+    assert.equal(p.price, 0, 'prix inconnu');
+    assert.equal(p.priceMax, undefined);
+    assert.equal(p.domesticShipping, 0);
+    assert.equal(p.stock, 1527, 'sans SKU, stock global');
+    assert.deepEqual(p.descriptionImages, ['https://img.alicdn.com/imgextra/d1.jpg']);
+  });
+
+  it('convertit les prix Alibaba.com (USD) en CNY', async () => {
+    const item = { num_iid: '1600000000001', title: 'LED strip', price: '2.00', currency_code: 'USD', min_num: '10', priceRange: [['10', '2.00'], ['100', '1.50']] };
+    const { fetcher, calls } = fakeFetch((url) =>
+      url.includes('item_search')
+        ? { body: { items: { item: [{ num_iid: '1600000000001', title: 'LED strip', price: '2.00' }] }, error_code: '0000' } }
+        : { body: { item, error_code: '0000' } },
+    );
+    const provider = new OneboundProvider({ key: 'k', secret: 's', fetcher, usdToCny: async () => 7 });
+    const p = (await provider.getProduct('alibaba', '1600000000001'))!;
+    assert.deepEqual([p.price, p.priceMax, p.moq], [10.5, 14, 10]);
+    assert.deepEqual(p.priceTiers, [
+      { minQty: 10, price: 14 },
+      { minQty: 100, price: 10.5 },
+    ]);
+    const r = await provider.search(params({ platform: 'alibaba', maxPrice: 70 }));
+    assert.equal(query(calls[1]!).end_price, '10', 'filtre converti en USD');
+    assert.equal(r.items[0]?.price, 14);
+  });
+
+  it('cherche Tmall avec item_search_tmall', async () => {
+    const { fetcher, calls } = fakeFetch(() => ({ body: { items: { item: [] }, error_code: '0000' } }));
+    await new OneboundProvider({ key: 'k', secret: 's', fetcher }).search(params({ platform: 'tmall' }));
+    assert.equal(new URL(calls[0]!).pathname, '/taobao/item_search_tmall/');
   });
 
   it('cherche avec les valeurs de tri documentées et lit le nombre de pages', async () => {
@@ -352,6 +399,127 @@ describe('adaptateur TMAPI', () => {
   });
 });
 
+// Structure identique à une réponse brute OTAPI pour Taobao (valeurs fictives).
+const OTAPI_ITEM = {
+  Id: '623000000001',
+  ErrorCode: 'Ok',
+  HasError: false,
+  ProviderType: 'Taobao',
+  Title: 'Retro denim dress',
+  OriginalTitle: '复古牛仔连衣裙',
+  VendorName: 'exemple旗舰店',
+  ExternalItemUrl: 'https://item.taobao.com/item.htm?id=623000000001',
+  MainPictureUrl: 'https://img.alicdn.com/imgextra///img.alicdn.com/imgextra/i2/main.jpg',
+  Price: { OriginalPrice: 699.0, MarginPrice: 705.0, OriginalCurrencyCode: 'CNY', ConvertedPriceWithoutSign: '108.84', DeliveryPrice: { OriginalPrice: 6.0 } },
+  Pictures: [{ Url: 'https://img.alicdn.com/imgextra///img.alicdn.com/imgextra/i2/main.jpg', Large: { Url: 'https://img.alicdn.com/imgextra///img.alicdn.com/imgextra/i2/main.jpg' }, IsMain: true }],
+  Location: { State: 'Tianjin' },
+  Features: ['Tmall'],
+  FeaturedValues: [
+    { Name: 'TaobaoVendorId', Value: '2201198031066' },
+    { Name: 'SalesInLast30Days', Value: '91' },
+  ],
+  PhysicalParameters: {},
+  Attributes: [
+    { Pid: '20509', Vid: '1', PropertyName: 'Size', Value: 'S', OriginalPropertyName: '尺码', OriginalValue: 'S', IsConfigurator: true },
+    { Pid: '20509', Vid: '2', PropertyName: 'Size', Value: 'M', OriginalPropertyName: '尺码', OriginalValue: 'M', IsConfigurator: true },
+    { Pid: '1627207', Vid: '9', PropertyName: 'Color', Value: 'Blue', IsConfigurator: true, ImageUrl: 'https://img.alicdn.com/imgextra/i4/blue.jpg' },
+    { Pid: '20000', Vid: '3', PropertyName: 'Brand', Value: 'Exemple', IsConfigurator: false },
+  ],
+  ConfiguredItems: [
+    { Id: '4409000000001', Quantity: 21, Price: { OriginalPrice: 699.0 }, Configurators: [{ Pid: '20509', Vid: '1' }, { Pid: '1627207', Vid: '9' }] },
+    { Id: '4409000000002', Quantity: 0, Price: { OriginalPrice: 699.0 }, Configurators: [{ Pid: '20509', Vid: '2' }, { Pid: '1627207', Vid: '9' }] },
+  ],
+  MasterQuantity: 216,
+  Promotions: [{ Id: 'ot-d-promotion', Price: { OriginalPrice: 244.65 }, ConfiguredItems: [{ Id: '4409000000001', Price: { OriginalPrice: 244.65 } }] }],
+  FirstLotQuantity: 1,
+  ActualWeightInfo: { Weight: 0.0 },
+  Description: '<p><img src="https://img.alicdn.com/imgextra/i1/d1.jpg"/><img src=\'//img.alicdn.com/imgextra/i1/d2.jpg\'></p>',
+};
+
+describe('adaptateur OTAPI (RapidAPI)', () => {
+  it('corrige les URL d’images doublées', () => {
+    assert.equal(fixOtapiImage('https://img.alicdn.com/imgextra///img.alicdn.com/imgextra/i2/a.jpg'), 'https://img.alicdn.com/imgextra/i2/a.jpg');
+    assert.equal(fixOtapiImage('//img.alicdn.com/a.jpg'), 'https://img.alicdn.com/a.jpg');
+  });
+
+  it('lit une fiche Taobao : prix promo en CNY, SKU, attributs, port', async () => {
+    const { fetcher, calls } = fakeFetch(() => ({ body: { ErrorCode: 'Ok', Result: { Item: OTAPI_ITEM } } }));
+    const p = (await new OtapiProvider({ rapidApiKey: 'rk', fetcher }).getProduct('taobao', '623000000001'))!;
+    const url = new URL(calls[0]!);
+    assert.equal(url.host + url.pathname, 'taobao-tmall1.p.rapidapi.com/BatchGetItemFullInfo');
+    assert.deepEqual(query(calls[0]!), { language: 'en', itemId: '623000000001' });
+    assert.equal(p.title, 'Retro denim dress');
+    assert.equal(p.titleOriginal, '复古牛仔连衣裙');
+    assert.equal(p.image, 'https://img.alicdn.com/imgextra/i2/main.jpg');
+    assert.equal(p.price, 244.65, 'prix promotionnel du SKU en stock (OriginalPrice, pas le prix converti)');
+    assert.equal(p.skus[0]?.price, 244.65);
+    assert.equal(p.skus[1]?.price, 699);
+    assert.deepEqual(p.skus[0]?.props, { '20509': '1', '1627207': '9' });
+    assert.deepEqual(
+      p.props.map((x) => [x.pid, x.name, x.values.length]),
+      [
+        ['20509', 'Size', 2],
+        ['1627207', 'Color', 1],
+      ],
+    );
+    assert.equal(p.props[1]?.values[0]?.image, 'https://img.alicdn.com/imgextra/i4/blue.jpg');
+    assert.deepEqual(p.attributes, [{ name: 'Brand', value: 'Exemple' }]);
+    assert.equal(p.domesticShipping, 6);
+    assert.equal(p.sales, 91);
+    assert.equal(p.stock, 21);
+    assert.equal(p.weightKg, undefined);
+    assert.equal(p.location, 'Tianjin');
+    assert.deepEqual(p.descriptionImages, ['https://img.alicdn.com/imgextra/i1/d1.jpg', 'https://img.alicdn.com/imgextra/i1/d2.jpg']);
+    assert.equal(p.provider, 'otapi');
+  });
+
+  it('préfixe les identifiants 1688 et lit les paliers', async () => {
+    const item = { ...OTAPI_ITEM, Id: 'abb-800000000003', Promotions: [], FirstLotQuantity: 3, QuantityRanges: [{ MinQuantity: 3, Price: { OriginalPrice: 12 } }, { MinQuantity: 100, Price: { OriginalPrice: 9.5 } }] };
+    const { fetcher, calls } = fakeFetch(() => ({ body: { ErrorCode: 'Ok', Result: { Item: item } } }));
+    const p = (await new OtapiProvider({ rapidApiKey: 'rk', fetcher }).getProduct('1688', '800000000003'))!;
+    assert.equal(new URL(calls[0]!).host, 'otapi-1688.p.rapidapi.com');
+    assert.equal(query(calls[0]!).itemId, 'abb-800000000003');
+    assert.equal(p.moq, 3);
+    assert.deepEqual(p.priceTiers, [
+      { minQty: 3, price: 12 },
+      { minQty: 100, price: 9.5 },
+    ]);
+  });
+
+  it('cherche par décalage, reconnaît Tmall et trie la page par prix', async () => {
+    const content = [
+      { Id: '700000000011', Title: 'A', MainPictureUrl: '//img.alicdn.com/a.jpg', Price: { OriginalPrice: 30 }, Features: ['Tmall'], FeaturedValues: [{ Name: 'SalesInLast30Days', Value: '12' }], Location: { State: 'Zhejiang' } },
+      { Id: '700000000012', Title: 'B', Price: { OriginalPrice: 10 }, PromotionPrice: { OriginalPrice: 8 } },
+      { Id: 'sh-1', Title: 'pas un article chinois', Price: { OriginalPrice: 1 } },
+    ];
+    const { fetcher, calls } = fakeFetch(() => ({ body: { ErrorCode: 'Ok', Result: { Items: { Items: { Content: content, TotalCount: 500 }, MaximumPageCount: 100 } } } }));
+    const r = await new OtapiProvider({ rapidApiKey: 'rk', fetcher }).search(params({ page: 3, pageSize: 20, sort: 'price_asc', q: '连衣裙' }));
+    assert.deepEqual(query(calls[0]!), { language: 'en', framePosition: '40', frameSize: '20', ItemTitle: '连衣裙' });
+    assert.deepEqual(
+      r.items.map((i) => [i.id, i.price, i.priceMax]),
+      [
+        ['taobao:700000000012', 8, 10],
+        ['tmall:700000000011', 30, undefined],
+      ],
+    );
+    assert.equal(r.items[1]?.sales, 12);
+    assert.deepEqual([r.total, r.hasMore], [500, true]);
+  });
+
+  it('explique les erreurs RapidAPI et OTAPI', async () => {
+    const forbidden = fakeFetch(() => ({ status: 403, body: { message: 'You are not subscribed to this API.' } })).fetcher;
+    await assert.rejects(new OtapiProvider({ rapidApiKey: 'rk', fetcher: forbidden }).search(params()), (e: ProviderError) => e.status === 401 && /abonnez-vous/.test(e.message));
+    const quota = fakeFetch(() => ({ status: 429, body: { message: 'Too many requests' } })).fetcher;
+    await assert.rejects(new OtapiProvider({ rapidApiKey: 'rk', fetcher: quota }).search(params()), (e: ProviderError) => e.status === 429);
+    const indexing = fakeFetch(() => ({ body: { ErrorCode: 'NotAvailable', SubErrorCode: { Value: 'ItemIsNotComplete' } } })).fetcher;
+    await assert.rejects(new OtapiProvider({ rapidApiKey: 'rk', fetcher: indexing }).getProduct('taobao', '1234'), (e: ProviderError) => e.status === 503);
+    const missing = fakeFetch(() => ({ body: { ErrorCode: 'NotFound', ErrorDescription: 'Item not found' } })).fetcher;
+    assert.equal(await new OtapiProvider({ rapidApiKey: 'rk', fetcher: missing }).getProduct('taobao', '1234'), null);
+    const network = fakeFetch(() => new Error('connect ECONNREFUSED key=rk-secret-key')).fetcher;
+    await assert.rejects(new OtapiProvider({ rapidApiKey: 'rk-secret-key', fetcher: network }).search(params()), (e: Error) => !e.message.includes('rk-secret-key'));
+  });
+});
+
 /** Fournisseur factice qui compte les appels. */
 class CountingProvider implements ProductProvider {
   readonly name = 'compteur';
@@ -471,6 +639,8 @@ describe('fournisseur réel dans le cœur de l’API', () => {
     assert.throws(() => providerFromSettings({ provider: 'tmapi' }), ProviderConfigError);
     assert.equal(providerFromSettings({ provider: 'tmapi', tmapi: { token: 't' } }).name, 'tmapi');
     assert.equal(providerFromSettings({ provider: 'onebound', onebound: { key: 'k', secret: 's' } }).platforms.length, 6);
+    assert.equal(providerFromSettings({ provider: 'otapi', otapi: { rapidApiKey: 'r' } }).name, 'otapi');
+    assert.throws(() => providerFromSettings({ provider: 'otapi', otapi: { rapidApiKey: '' } }), ProviderConfigError);
     assert.equal(providerFromSettings({ provider: 'mock' }).isDemo, true);
     assert.throws(() => settingsFromEnv('inconnu'), ProviderConfigError);
   });

@@ -101,7 +101,10 @@ export class ShopService {
     if (stock <= 0) throw badRequest('Cette option est en rupture de stock');
     if (quantity > stock) throw badRequest(`Stock insuffisant (${stock} disponibles)`);
     if (product.moq && quantity < product.moq) throw badRequest(`Quantité minimum de commande : ${product.moq}`);
-    return { product, sku, unitPrice: unitPrice(product, sku, quantity) };
+    const price = unitPrice(product, sku, quantity);
+    // Prix inconnu chez le fournisseur (renvoyé comme 0 ou -1) : on ne commande jamais à 0 ¥.
+    if (!(price > 0)) throw badRequest('Prix indisponible pour cet article : réessayez plus tard ou contactez le support', 'price_unavailable');
+    return { product, sku, unitPrice: price };
   }
 
   async addToCart(userId: string, input: AddToCartInput): Promise<CartItem> {

@@ -15,6 +15,7 @@
  * Variables d'environnement : ONEBOUND_KEY, ONEBOUND_SECRET, ONEBOUND_BASE_URL, ONEBOUND_LANG.
  */
 import { buildSourceUrl } from '../lib/linkParser.js';
+import { getRates } from '../lib/currency.js';
 import { timeoutSignal } from '../lib/env.js';
 import type { Platform, PriceTier, ProductDetail, ProductSummary, SearchParams, SearchResult, Sku, SkuProp } from '../types.js';
 import { ProviderError, type ProductProvider } from './types.js';
@@ -55,7 +56,21 @@ export interface OneboundOptions {
   lang?: OneboundLang;
   fetcher?: typeof fetch;
   timeoutMs?: number;
+  /** Nombre de CNY pour 1 USD (Alibaba.com) ; par défaut, le taux du jour (ou de secours). */
+  usdToCny?: () => Promise<number>;
 }
+
+/** Taux du jour : les taux de l'application sont exprimés pour 1 CNY. */
+async function defaultUsdToCny(): Promise<number> {
+  const { rates } = await getRates();
+  return rates.USD ? 1 / rates.USD : 7.2;
+}
+
+/** Onebound renvoie -1 (ou 0) quand le prix est inconnu : on le ramène à 0 (« prix indisponible »). */
+const priceOf = (v: unknown): number => Math.max(0, num(v));
+
+/** Pixel de suivi inséré par la passerelle dans les images de description. */
+const isTrackingPixel = (url: string) => /(^|\/\/)(www\.)?o0b\.cn\//i.test(url);
 
 /** « 颜色分类:乳白色 » → ['颜色分类', '乳白色'] (seul le premier « : » sépare le nom de la valeur). */
 function splitLabel(label: string): [string, string] {
@@ -94,13 +109,13 @@ export function mapSkus(item: Json): { props: SkuProp[]; skus: Sku[] } {
     propMap.set(pid, prop);
   }
 
-  const fallbackPrice = num(item.price);
+  const fallbackPrice = priceOf(item.price);
   const skus: Sku[] = arr(obj(item.skus).sku).map((raw, i) => {
     const s = obj(raw);
     return {
       skuId: str(s.sku_id) || String(i),
       props: parsePropPath(s.properties),
-      price: num(s.price, fallbackPrice) || fallbackPrice,
+      price: priceOf(s.price) || fallbackPrice,
       stock: num(s.quantity),
     };
   });
@@ -113,14 +128,18 @@ export function mapPriceTiers(item: Json): PriceTier[] | undefined {
   const tiers = arr(item.priceRange)
     .map((t) => {
       const pair = arr(t);
-      return { minQty: num(pair[0]), price: num(pair[1]) };
+      return { minQty: num(pair[0]), price: priceOf(pair[1]) };
     })
     .filter((t) => t.minQty > 0 && t.price > 0)
     .sort((a, b) => a.minQty - b.minQty);
   return tiers.length > 1 ? tiers : undefined;
 }
 
-export function mapItem(platform: Platform, itemId: string, item: Json, provider = 'onebound'): ProductDetail {
+/**
+ * @param usdToCny taux de conversion appliqué quand l'article est en dollars
+ *   (Alibaba.com : currency_code « USD ») ; les prix de l'application sont en CNY.
+ */
+export function mapItem(platform: Platform, itemId: string, item: Json, provider = 'onebound', usdToCny?: number): ProductDetail {
   const { props, skus } = mapSkus(item);
   const images = arr(item.item_imgs)
     .map((i) => normalizeImageUrl(obj(i).url))
@@ -130,8 +149,9 @@ export function mapItem(platform: Platform, itemId: string, item: Json, provider
   const prices = skus.map((s) => s.price).filter((p) => p > 0);
   const tierPrices = (priceTiers ?? []).map((t) => t.price);
   const allPrices = prices.length ? prices : tierPrices;
-  const price = allPrices.length ? Math.min(...allPrices) : num(item.price);
-  const maxPrice = allPrices.length ? Math.max(...allPrices) : num(item.orginal_price ?? item.original_price, price);
+  const price = allPrices.length ? Math.min(...allPrices) : priceOf(item.price);
+  // orginal_price est un prix barré, pas un maximum : seul l'écart entre SKU/paliers compte.
+  const maxPrice = allPrices.length ? Math.max(...allPrices) : price;
   const seller = obj(item.seller_info);
   const attributes = arr(item.props)
     .map((p) => ({ name: str(obj(p).name), value: str(obj(p).value) }))
@@ -141,7 +161,7 @@ export function mapItem(platform: Platform, itemId: string, item: Json, provider
   const location = str(item.location) || undefined;
   const skuStock = skus.reduce((sum, k) => sum + k.stock, 0);
 
-  return {
+  const detail: ProductDetail = {
     id: `${platform}:${itemId}`,
     platform,
     itemId,
@@ -158,11 +178,13 @@ export function mapItem(platform: Platform, itemId: string, item: Json, provider
     props,
     skus,
     priceTiers,
-    // post_fee / express_fee valent 0 quand le vendeur offre le port ou quand l'info manque.
-    domesticShipping: num(item.express_fee, num(item.post_fee)),
+    // post_fee / express_fee valent 0, '' ou null quand le port est offert ou non renseigné.
+    domesticShipping: positive(item.express_fee) ?? positive(item.post_fee) ?? 0,
     weightKg: positive(item.item_weight),
     attributes,
-    descriptionImages: arr(item.desc_img).map(normalizeImageUrl).filter(Boolean),
+    descriptionImages: arr(item.desc_img)
+      .map(normalizeImageUrl)
+      .filter((u) => u && !isTrackingPixel(u)),
     descriptionText: undefined,
     seller: {
       name: str(seller.shop_name ?? seller.title ?? seller.nick ?? item.nick) || 'Vendeur',
@@ -173,22 +195,38 @@ export function mapItem(platform: Platform, itemId: string, item: Json, provider
     provider,
     isDemoData: false,
   };
+  return str(item.currency_code).toUpperCase() === 'USD' && usdToCny ? convertDetail(detail, usdToCny) : detail;
 }
 
-export function mapSearchItem(platform: Platform, raw: unknown): ProductSummary | null {
+const toCny = (usd: number, rate: number) => Math.round(usd * rate * 100) / 100;
+
+/** Alibaba.com affiche ses prix en dollars : conversion en CNY au taux du jour (indicatif). */
+function convertDetail(p: ProductDetail, rate: number): ProductDetail {
+  return {
+    ...p,
+    price: toCny(p.price, rate),
+    priceMax: p.priceMax === undefined ? undefined : toCny(p.priceMax, rate),
+    skus: p.skus.map((s) => ({ ...s, price: toCny(s.price, rate) })),
+    priceTiers: p.priceTiers?.map((t) => ({ ...t, price: toCny(t.price, rate) })),
+    attributes: [...p.attributes, { name: 'Prix d’origine', value: `en dollars US, convertis au taux de 1 USD = ${rate.toFixed(4)} CNY` }],
+  };
+}
+
+export function mapSearchItem(platform: Platform, raw: unknown, usdToCny?: number): ProductSummary | null {
   const i = obj(raw);
   const itemId = str(i.num_iid);
   if (!itemId) return null;
-  const price = num(i.promotion_price) || num(i.price);
-  const original = num(i.orginal_price ?? i.price);
+  const rate = usdToCny ?? 1;
+  const price = priceOf(i.promotion_price) || priceOf(i.price);
+  const original = priceOf(i.orginal_price ?? i.price);
   return {
     id: `${platform}:${itemId}`,
     platform,
     itemId,
     title: str(i.title),
     image: normalizeImageUrl(i.pic_url),
-    price,
-    priceMax: original > price ? original : undefined,
+    price: Math.round(price * rate * 100) / 100,
+    priceMax: original > price ? Math.round(original * rate * 100) / 100 : undefined,
     sales: positive(i.sales),
     shopName: str(i.nick ?? i.seller_nick) || undefined,
     location: str(i.area ?? i.location) || undefined,
@@ -210,16 +248,18 @@ export class OneboundProvider implements ProductProvider {
   private readonly lang: OneboundLang;
   private readonly fetcher: typeof fetch;
   private readonly timeoutMs: number;
+  private readonly usdToCny: () => Promise<number>;
 
   constructor(private readonly options: OneboundOptions) {
     this.baseUrl = options.baseUrl || ONEBOUND_DEFAULT_BASE_URL;
     this.lang = options.lang ?? 'cn';
     this.fetcher = options.fetcher ?? ((input, init) => fetch(input, init));
     this.timeoutMs = options.timeoutMs ?? 20000;
+    this.usdToCny = options.usdToCny ?? defaultUsdToCny;
   }
 
   /** Renvoie null quand Onebound répond « aucun résultat / article introuvable » (code 2000). */
-  private async call(platform: Platform, method: 'item_get' | 'item_search', params: Record<string, string | number | undefined>): Promise<Json | null> {
+  private async call(platform: Platform, method: 'item_get' | 'item_search' | 'item_search_tmall', params: Record<string, string | number | undefined>): Promise<Json | null> {
     const url = buildUrl(this.baseUrl, `/${API_NAME[platform]}/${method}/`, {
       key: this.options.key,
       secret: this.options.secret,
@@ -253,22 +293,27 @@ export class OneboundProvider implements ProductProvider {
     const json = await this.call(platform, 'item_get', { num_iid: itemId, ...(platform === '1688' ? {} : { is_promotion: 1 }) });
     const item = obj(json?.item);
     if (!str(item.num_iid) && !str(item.title)) return null;
-    return mapItem(platform, itemId, item, this.name);
+    const rate = str(item.currency_code).toUpperCase() === 'USD' ? await this.usdToCny() : undefined;
+    return mapItem(platform, itemId, item, this.name, rate);
   }
 
   async search(params: SearchParams): Promise<SearchResult> {
     const platform = params.platform ?? 'taobao';
-    const json = await this.call(platform, 'item_search', {
+    // Alibaba.com est en dollars : filtres de prix convertis à l'aller, prix des résultats au retour.
+    const rate = platform === 'alibaba' ? await this.usdToCny() : undefined;
+    const toProviderPrice = (cny?: number) => (cny === undefined || !rate ? cny : Math.round((cny / rate) * 100) / 100);
+    // taobao/item_search mélange Taobao et Tmall : item_search_tmall ne renvoie que des boutiques Tmall.
+    const json = await this.call(platform, platform === 'tmall' ? 'item_search_tmall' : 'item_search', {
       q: params.q,
       page: params.page,
       page_size: params.pageSize,
       sort: SORT[params.sort],
-      start_price: params.minPrice,
-      end_price: params.maxPrice,
+      start_price: toProviderPrice(params.minPrice),
+      end_price: toProviderPrice(params.maxPrice),
     });
     const items = obj(json?.items);
     const list = arr(items.item)
-      .map((i) => mapSearchItem(platform, i))
+      .map((i) => mapSearchItem(platform, i, rate))
       .filter((i): i is ProductSummary => i !== null);
     const total = num(items.real_total_results ?? items.total_results, list.length);
     const pageCount = num(items.pagecount, 0);
