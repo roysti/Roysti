@@ -10,7 +10,8 @@ import { constantTimeEqual, type Runtime } from '../../../backend/src/core/runti
  */
 export const mobileRuntime: Runtime = {
   uuid: () => Crypto.randomUUID(),
-  randomHex: (bytes) => bytesToHex(Crypto.getRandomBytes(bytes)),
+  // getRandomValues : toujours natif (getRandomBytes retombe sur Math.random en développement sans pont).
+  randomHex: (bytes) => bytesToHex(Crypto.getRandomValues(new Uint8Array(bytes))),
   hashPassword: (password, salt) => bytesToHex(pbkdf2(sha256, password, salt, { c: 10_000, dkLen: 32 })),
   safeEqual: constantTimeEqual,
 };

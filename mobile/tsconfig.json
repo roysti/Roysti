@@ -8,6 +8,9 @@
       ],
       "@/assets/*": [
         "./assets/*"
+      ],
+      "zod": [
+        "./node_modules/zod"
       ]
     }
   },

@@ -1,3 +1,5 @@
+// En premier : configure zod avant l'évaluation des modules du backend qui créent des schémas.
+import './zod-setup';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createCore, type ApiRequest, type ApiResponse, type Core } from '../../../backend/src/core/api';
 import { MockProvider } from '../../../backend/src/providers/mock';

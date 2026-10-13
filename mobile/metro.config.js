@@ -18,7 +18,11 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
   if (context.originModulePath.startsWith(sharedRoot + path.sep)) {
     // Le backend utilise des imports TypeScript de style NodeNext (« ./foo.js » pour foo.ts).
     if (moduleName.startsWith('.') && moduleName.endsWith('.js')) {
-      return resolve(context, moduleName.slice(0, -3), platform);
+      try {
+        return resolve(context, moduleName.slice(0, -3), platform);
+      } catch {
+        // Vrai fichier .js : résolution normale ci-dessous.
+      }
     }
     // Les dépendances (zod…) sont résolues depuis les node_modules de l'application,
     // jamais depuis ../backend/node_modules (absent lors des builds CI).
