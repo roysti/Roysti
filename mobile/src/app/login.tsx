@@ -16,7 +16,8 @@ type IdType = 'phone' | 'email';
 type Method = 'code' | 'password';
 
 interface AuthConfig {
-  channels: { email: { demo: boolean }; sms: { demo: boolean } };
+  /** available = false : le serveur n'envoie pas de codes sur ce canal (connexion par mot de passe). */
+  channels: { email: { demo: boolean; available?: boolean }; sms: { demo: boolean; available?: boolean } };
   passwordMinLength: number;
 }
 
@@ -37,7 +38,9 @@ export default function LoginScreen() {
 
   const channel = idType === 'phone' ? 'sms' : 'email';
   const identifier = idType === 'phone' ? phone : email;
-  const isDemoChannel = authConfig.data?.channels[channel].demo;
+  const codeAvailable = authConfig.data?.channels[channel].available !== false;
+  const isDemoChannel = codeAvailable && authConfig.data?.channels[channel].demo;
+  const loginMethod: Method = codeAvailable ? method : 'password';
   const minLength = authConfig.data?.passwordMinLength ?? 8;
 
   const close = () => (router.canGoBack() ? router.back() : router.replace('/'));
@@ -115,16 +118,22 @@ export default function LoginScreen() {
 
       {mode === 'login' ? (
         <>
-          <View style={styles.chips}>
-            <Chip label={`Code par ${idType === 'phone' ? 'SMS' : 'e-mail'}`} active={method === 'code'} onPress={() => setMethod('code')} />
-            <Chip label="Mot de passe" active={method === 'password'} onPress={() => setMethod('password')} />
-          </View>
-          {method === 'password' ? (
+          {codeAvailable ? (
+            <View style={styles.chips}>
+              <Chip label={`Code par ${idType === 'phone' ? 'SMS' : 'e-mail'}`} active={method === 'code'} onPress={() => setMethod('code')} />
+              <Chip label="Mot de passe" active={method === 'password'} onPress={() => setMethod('password')} />
+            </View>
+          ) : (
+            <Text style={styles.hint}>Les codes par {idType === 'phone' ? 'SMS' : 'e-mail'} ne sont pas disponibles sur ce serveur : connectez-vous avec votre mot de passe.</Text>
+          )}
+          {loginMethod === 'password' ? (
             <>
               <Field label="Mot de passe" value={password} onChangeText={setPassword} secureTextEntry autoComplete="current-password" />
-              <Pressable onPress={() => sendCode('reset')} hitSlop={8}>
-                <Text style={styles.link}>Mot de passe oublié ?</Text>
-              </Pressable>
+              {codeAvailable ? (
+                <Pressable onPress={() => sendCode('reset')} hitSlop={8}>
+                  <Text style={styles.link}>Mot de passe oublié ?</Text>
+                </Pressable>
+              ) : null}
             </>
           ) : (
             <Text style={styles.hint}>
@@ -146,7 +155,7 @@ export default function LoginScreen() {
 
       {mode === 'register' ? (
         <Button title="Créer mon compte" icon="person-add-outline" onPress={register} loading={loading === 'register'} disabled={!!loading} />
-      ) : method === 'code' ? (
+      ) : loginMethod === 'code' ? (
         <Button title="Recevoir un code" icon="chatbubble-ellipses-outline" onPress={() => sendCode('login')} loading={loading === 'login'} disabled={!!loading} />
       ) : (
         <Button title="Se connecter" icon="log-in-outline" onPress={passwordLogin} loading={loading === 'password'} disabled={!!loading} />

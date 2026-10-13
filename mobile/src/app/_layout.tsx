@@ -4,12 +4,20 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, type ReactNode } from 'react';
 import { colors } from '@/constants/theme';
+import { ApiError } from '@/lib/api';
 import { SessionProvider, useSession } from '@/lib/session';
 
 SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
+  defaultOptions: {
+    queries: {
+      // Une seule nouvelle tentative, et seulement si le serveur était injoignable :
+      // une erreur du fournisseur d'articles serait facturée une seconde fois.
+      retry: (count, error) => count < 1 && error instanceof ApiError && error.code === 'network',
+      staleTime: 30_000,
+    },
+  },
 });
 
 function WhenReady({ children }: { children: ReactNode }) {

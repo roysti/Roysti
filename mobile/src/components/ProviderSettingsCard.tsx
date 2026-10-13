@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import * as WebBrowser from 'expo-web-browser';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Button, Card, Chip, Field, Notice } from '@/components/ui';
 import { colors, radius, spacing } from '@/constants/theme';
@@ -66,6 +66,8 @@ function ProviderForm({ initial }: { initial: ProviderSettings }) {
   const [result, setResult] = useState<{ tone: 'success' | 'danger' | 'warning'; text: string; sample?: ProviderTestResult['sample'] } | null>(null);
   const info = PROVIDERS.find((p) => p.id === form.provider) ?? PROVIDERS[0]!;
   const changed = JSON.stringify(form) !== JSON.stringify(initial);
+  /** Réglages déjà testés avec succès : « Enregistrer » ne refait pas l'appel (facturé). */
+  const testedOk = useRef<string | null>(null);
 
   const patch = <K extends 'onebound' | 'tmapi' | 'otapi'>(key: K, value: Partial<NonNullable<ProviderSettings[K]>>) =>
     setForm((f) => ({ ...f, [key]: { ...(f[key] ?? {}), ...value } }) as ProviderSettings);
@@ -76,6 +78,7 @@ function ProviderForm({ initial }: { initial: ProviderSettings }) {
     try {
       const r = await testProviderSettings(form);
       setResult({ tone: 'success', text: r.message, sample: r.sample });
+      testedOk.current = JSON.stringify(form);
       return true;
     } catch (e) {
       setResult({ tone: 'danger', text: errorMessage(e) });
@@ -86,11 +89,15 @@ function ProviderForm({ initial }: { initial: ProviderSettings }) {
   };
 
   const save = async (skipTest = false) => {
-    if (!skipTest && form.provider !== 'mock' && !(await test())) return;
+    const alreadyTested = testedOk.current === JSON.stringify(form);
+    if (!skipTest && !alreadyTested && form.provider !== 'mock' && !(await test())) return;
     setBusy('save');
     try {
       await applyProviderSettings(form);
-      await queryClient.invalidateQueries();
+      // Les articles changent de source : on repart de la première page (pas de rechargement
+      // de toutes les pages déjà parcourues, chacune serait un appel facturé).
+      await queryClient.resetQueries({ queryKey: ['search'] });
+      await queryClient.invalidateQueries({ predicate: (q) => !['search', 'provider-settings'].includes(String(q.queryKey[0])) });
       setResult((r) => ({
         tone: 'success',
         text: form.provider === 'mock' ? 'Catalogue de démonstration rétabli.' : `${r?.tone === 'success' ? `${r.text} ` : ''}Réglages enregistrés : les recherches utilisent maintenant ${info.label}.`,

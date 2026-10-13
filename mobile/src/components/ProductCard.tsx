@@ -29,7 +29,7 @@ export function ProductCard({ product }: { product: ProductSummary }) {
         <Text numberOfLines={2} style={styles.title}>
           {product.title}
         </Text>
-        <Price cny={product.price} size="sm" />
+        <Price cny={product.price} size="sm" unknownIfZero />
         <View style={styles.meta}>
           {product.sales ? <Text style={styles.metaText}>{product.sales.toLocaleString('fr-FR')} ventes</Text> : <View />}
           {product.moq && product.moq > 1 ? <Text style={styles.moq}>Min. {product.moq}</Text> : null}

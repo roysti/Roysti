@@ -3,12 +3,25 @@ import { colors } from '@/constants/theme';
 import { formatCny, useMoney } from '@/lib/money';
 
 /** Prix en CNY (devise de la plateforme) et conversion approximative dans la devise choisie. */
-export function Price({ cny, max, size = 'md', inline }: { cny: number; max?: number; size?: 'sm' | 'md' | 'lg'; inline?: boolean }) {
+export function Price({
+  cny,
+  max,
+  size = 'md',
+  inline,
+  unknownIfZero,
+}: {
+  cny: number;
+  max?: number;
+  size?: 'sm' | 'md' | 'lg';
+  inline?: boolean;
+  /** Prix d'article : 0 signifie « inconnu » (certains fournisseurs ne le donnent qu'avec la fiche). */
+  unknownIfZero?: boolean;
+}) {
   const { convert, currency } = useMoney();
   const converted = currency !== 'CNY' ? convert(cny) : null;
   const fontSize = size === 'lg' ? 26 : size === 'md' ? 17 : 14;
   // Certains fournisseurs ne donnent pas le prix dans les résultats de recherche (0 ou -1).
-  if (!(cny > 0)) return <Text style={[styles.unknown, { fontSize: fontSize * 0.8 }]}>Prix sur la fiche</Text>;
+  if (unknownIfZero && !(cny > 0)) return <Text style={[styles.unknown, { fontSize: fontSize * 0.8 }]}>Prix sur la fiche</Text>;
   return (
     <View style={inline ? styles.inline : undefined}>
       <Text style={[styles.cny, { fontSize }]}>

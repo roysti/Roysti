@@ -26,8 +26,15 @@ export default function SearchScreen() {
   const [category, setCategory] = useState<string | undefined>(params.category);
   const [sort, setSort] = useState<SortOrder>('default');
   const [showFilters, setShowFilters] = useState(false);
+  // Saisie du filtre de prix ; appliqué seulement à la validation (chaque recherche peut être facturée).
+  const [minDraft, setMinDraft] = useState('');
+  const [maxDraft, setMaxDraft] = useState('');
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
+  const applyPrices = () => {
+    setMinPrice(minDraft.trim());
+    setMaxPrice(maxDraft.trim());
+  };
 
   const query = useInfiniteQuery({
     queryKey: ['search', q, platform, category, sort, minPrice, maxPrice],
@@ -79,9 +86,30 @@ export default function SearchScreen() {
         {showFilters ? (
           <View style={styles.filters}>
             <Text style={styles.filterLabel}>Prix (¥)</Text>
-            <TextInput value={minPrice} onChangeText={setMinPrice} keyboardType="numeric" placeholder="Min" style={styles.priceInput} placeholderTextColor={colors.textMuted} />
+            <TextInput
+              value={minDraft}
+              onChangeText={setMinDraft}
+              onSubmitEditing={applyPrices}
+              onBlur={applyPrices}
+              returnKeyType="search"
+              keyboardType="numeric"
+              placeholder="Min"
+              style={styles.priceInput}
+              placeholderTextColor={colors.textMuted}
+            />
             <Text style={styles.filterLabel}>–</Text>
-            <TextInput value={maxPrice} onChangeText={setMaxPrice} keyboardType="numeric" placeholder="Max" style={styles.priceInput} placeholderTextColor={colors.textMuted} />
+            <TextInput
+              value={maxDraft}
+              onChangeText={setMaxDraft}
+              onSubmitEditing={applyPrices}
+              onBlur={applyPrices}
+              returnKeyType="search"
+              keyboardType="numeric"
+              placeholder="Max"
+              style={styles.priceInput}
+              placeholderTextColor={colors.textMuted}
+            />
+            {minDraft.trim() !== minPrice || maxDraft.trim() !== maxPrice ? <Chip label="Appliquer" active onPress={applyPrices} /> : null}
             {category ? <Chip label={`${categoryName ?? category} ✕`} active onPress={() => setCategory(undefined)} /> : null}
           </View>
         ) : null}
@@ -109,7 +137,15 @@ export default function SearchScreen() {
           ) : query.error ? (
             <ErrorView message={errorMessage(query.error)} onRetry={() => query.refetch()} />
           ) : (
-            <EmptyState icon="search-outline" title="Aucun résultat" message="Essayez d’autres mots-clés (en français ou en chinois) ou collez directement un lien." />
+            <EmptyState
+              icon="search-outline"
+              title="Aucun résultat"
+              message={
+                minPrice || maxPrice
+                  ? 'Aucun article dans cette fourchette de prix parmi les premiers résultats : élargissez-la ou retirez le filtre.'
+                  : 'Essayez d’autres mots-clés (en français ou en chinois) ou collez directement un lien.'
+              }
+            />
           )
         }
         ListFooterComponent={query.isFetchingNextPage ? <ActivityIndicator color={colors.primary} style={{ margin: spacing.lg }} /> : null}

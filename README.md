@@ -52,8 +52,12 @@ L'APK est compilé automatiquement par GitHub Actions ([`.github/workflows/andro
 - Connexion **par code à 6 chiffres** (SMS ou e-mail ; le compte est créé au premier code) ou **par mot de passe**, avec l'e-mail ou le numéro au choix.
 - Numéros saisis au format national avec l'indicatif du pays (Madagascar par défaut), normalisés au format international E.164 (`libphonenumber-js`).
 - Vérification de l'e-mail et du numéro, ajout ou changement de l'un ou de l'autre, mot de passe oublié (code puis nouveau mot de passe, autres appareils déconnectés).
-- Codes à usage unique hachés, valables 10 minutes, 5 essais au plus, renvoi après 60 s et 5 envois par heure et par destinataire ; réponses identiques que le compte existe ou non.
-- Envoi réel par **Twilio** (SMS) et **Resend** (e-mail) quand le serveur est configuré ; sinon, mode démonstration : le code s'affiche à l'écran.
+- Codes à usage unique hachés, valables 10 minutes, 5 essais au plus. Renvoi après 60 s ; au plus 5 envois par heure et 10 par jour et par destinataire, et 10 par heure et par client. Plafond global horaire, et blocage de l'adresse 24 h après 20 essais ratés. Le mot de passe oublié répond de la même façon que le compte existe ou non.
+- Envoi réel par **Twilio** (SMS) et **Resend** (e-mail) quand le serveur est configuré. En mode démonstration (application seule ou `DEMO_MODE=true`), le code s'affiche à l'écran. Avec `DEMO_MODE=false`, un canal non configuré est refusé : le code n'est jamais renvoyé à l'application.
+- Protection contre les comptes préparés par un tiers. Quand quelqu'un prouve posséder un e-mail ou un numéro qu'un compte portait sans l'avoir vérifié, deux cas :
+  - si ce compte a prouvé posséder un autre identifiant, l'adresse lui est retirée et son titulaire obtient un compte séparé ;
+  - sinon, le titulaire reprend le compte, et le mot de passe et les sessions de l'inscripteur sont supprimés.
+- Remplacer un e-mail ou un numéro déjà vérifié exige le mot de passe actuel (s'il y en a un) et ferme les autres sessions.
 
 ## Démarrage rapide (développement)
 
@@ -89,6 +93,8 @@ En mode démo, le bouton **« Démo : simuler l'étape suivante »** sur une com
 | `FEATURED_QUERY` | `热销` | Mots-clés de la page d'accueil avec un vrai fournisseur |
 | `SMS_PROVIDER` | – | `twilio` pour envoyer les codes par SMS : `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM` ou `TWILIO_MESSAGING_SERVICE_SID` |
 | `EMAIL_PROVIDER` | – | `resend` pour envoyer les codes par e-mail : `RESEND_API_KEY`, `EMAIL_FROM` |
+| `OTP_GLOBAL_HOURLY_LIMIT` | `300` | Nombre maximal de codes réellement envoyés par heure (protection de la facture SMS) |
+| `TRUST_PROXY` | – | À définir derrière un proxy (ex. `1`) pour limiter les envois par adresse IP réelle du client |
 | `DEMO_MODE` | `true` | Active les routes `/api/demo/*` et le compte démo |
 | `DATA_FILE` | – | Fichier JSON de persistance (sinon tout est en mémoire) |
 | `RATES_URL` | `https://open.er-api.com/v6/latest/CNY` | Service de taux de change |
@@ -114,8 +120,8 @@ L'API ne dépend que de l'interface `ProductProvider` ([`backend/src/providers/t
 
 Ce que fait l'application avec un vrai fournisseur :
 - **recherche traduite** : les plateformes cherchent en chinois, donc les termes courants sont traduits (« robe rouge » → « 连衣裙 红色 », « coque iPhone 15 » → « 手机壳 iphone 15 »). Les marques et modèles sont gardés, le chinois est envoyé tel quel, et l'écran affiche les mots-clés envoyés. Les catégories ajoutent leur mot-clé chinois ;
-- **cache** de 10 min (recherches) et 30 min (fiches) devant les API payantes : une requête identique ne coûte qu'un appel, et les erreurs ne sont jamais mises en cache ;
-- **prix toujours relus chez le fournisseur** à l'ajout au panier et au paiement. Un article sans prix connu (0 ou -1) ne peut pas être commandé, et un article ajouté depuis une autre source (par exemple le catalogue de démo) doit être ajouté à nouveau ;
+- **cache** de 10 min (recherches) et 30 min (fiches) devant les API payantes : une requête identique ne coûte qu'un appel, et les erreurs ne sont jamais mises en cache. L'application ne relance pas un appel échoué, et ne recharge pas les pages déjà vues ;
+- **prix toujours relus chez le fournisseur** à l'ajout au panier, puis **sans cache** au paiement. Un article sans prix connu (0 ou -1) ne peut pas être commandé, et un article ajouté depuis une autre source (par exemple le catalogue de démo) doit être ajouté à nouveau ;
 - **erreurs expliquées** : clé refusée, abonnement manquant, quota épuisé, article introuvable. Les clés n'apparaissent jamais dans les messages.
 
 D'où viennent les formats ? Les sites des fournisseurs n'étaient pas joignables depuis l'environnement de développement. La correspondance des champs a donc été établie à partir de **réponses brutes réelles publiées** :
@@ -164,7 +170,7 @@ La table des routes et l'aiguillage vivent dans [`backend/src/core/api.ts`](back
 ## Tests et vérifications
 
 ```bash
-cd backend && npm test && npm run typecheck   # 98 tests : liens, frais, port, parcours complet, cœur portable, connexion, fournisseurs
+cd backend && npm test && npm run typecheck   # 108 tests : liens, frais, port, parcours complet, cœur portable, connexion, fournisseurs
 cd mobile && npx tsc --noEmit && npx expo lint
 ```
 

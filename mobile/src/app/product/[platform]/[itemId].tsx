@@ -129,7 +129,7 @@ export default function ProductScreen() {
 
         <View style={styles.block}>
           <View style={styles.priceRow}>
-            <Price cny={allSelected ? price : p.price} max={allSelected ? undefined : p.priceMax} size="lg" />
+            <Price cny={allSelected ? price : p.price} max={allSelected ? undefined : p.priceMax} size="lg" unknownIfZero />
             <PlatformTag platform={p.platform} />
           </View>
           <Text style={styles.title} selectable>

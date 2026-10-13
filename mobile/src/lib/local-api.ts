@@ -98,7 +98,8 @@ export interface ProviderTestResult {
 export async function testProviderSettings(settings: ProviderSettings): Promise<ProviderTestResult> {
   const provider = providerFromSettings(settings);
   if (provider.isDemo) return { message: 'Catalogue de démonstration : aucune clé nécessaire.' };
-  const result = await provider.search({ q: '手机壳', platform: provider.platforms[0], page: 1, pageSize: 1, sort: 'default' });
+  // Plateforme par défaut du fournisseur (OTAPI bascule sur 1688 si la clé n'est abonnée qu'à « Otapi 1688 »).
+  const result = await provider.search({ q: '手机壳', page: 1, pageSize: 1, sort: 'default' });
   const sample = result.items[0];
   return {
     message: sample ? `Connexion réussie : ${result.total.toLocaleString('fr-FR')} articles trouvés.` : 'Connexion réussie, mais la recherche de test est vide.',
@@ -108,6 +109,8 @@ export async function testProviderSettings(settings: ProviderSettings): Promise<
 
 /** Enregistre les réglages et reconstruit l'API embarquée avec le nouveau fournisseur. */
 export async function applyProviderSettings(settings: ProviderSettings): Promise<void> {
+  // Réglages incomplets (clé vide…) : erreur explicite plutôt qu'un retour silencieux à la démo.
+  providerFromSettings(settings);
   await saveProviderSettings(settings);
   corePromise = null;
 }

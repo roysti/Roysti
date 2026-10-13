@@ -37,6 +37,8 @@ function Profile() {
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
+  /** Mot de passe actuel, exigé pour remplacer un e-mail ou un numéro déjà vérifié. */
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [message, setMessage] = useState<{ tone: 'success' | 'danger'; text: string } | null>(null);
 
@@ -55,9 +57,10 @@ function Profile() {
 
   const sendVerification = useMutation({
     mutationFn: ({ channel, destination }: { channel: OtpChannel; destination: string }) =>
-      api<OtpSent>('/auth/otp/request', { body: { channel, destination, country, purpose: 'verify' } }),
+      api<OtpSent>('/auth/otp/request', { body: { channel, destination, country, purpose: 'verify', currentPassword: confirmPassword || undefined } }),
     onSuccess: (sent) => {
       setEditing(null);
+      setConfirmPassword('');
       setMessage(null);
       openOtp(sent, 'verify', { from: 'profile' });
     },
@@ -76,6 +79,11 @@ function Profile() {
   });
 
   if (!user) return <Loading />;
+  const replacing = (channel: OtpChannel) => user.hasPassword && (channel === 'sms' ? !!user.phone && user.phoneVerified : !!user.email && user.emailVerified);
+  const passwordConfirm = (channel: OtpChannel) =>
+    replacing(channel) ? (
+      <Field label="Mot de passe actuel (pour confirmer le changement)" value={confirmPassword} onChangeText={setConfirmPassword} secureTextEntry autoComplete="current-password" />
+    ) : null;
 
   return (
     <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
@@ -100,6 +108,7 @@ function Profile() {
         {editing === 'sms' ? (
           <>
             <PhoneField label="Nouveau numéro" country={country} onCountryChange={setCountry} value={phone} onChangeText={setPhone} autoFocus />
+            {passwordConfirm('sms')}
             <Button small title="Recevoir un code de confirmation" onPress={() => sendVerification.mutate({ channel: 'sms', destination: phone })} loading={sendVerification.isPending} />
           </>
         ) : (
@@ -125,6 +134,7 @@ function Profile() {
         {editing === 'email' ? (
           <>
             <Field label="Nouvel e-mail" value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" autoComplete="email" autoFocus />
+            {passwordConfirm('email')}
             <Button small title="Recevoir un code de confirmation" onPress={() => sendVerification.mutate({ channel: 'email', destination: email })} loading={sendVerification.isPending} />
           </>
         ) : (
