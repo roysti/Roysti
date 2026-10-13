@@ -111,3 +111,78 @@ describe('graphe d’imports du cœur', () => {
     assert.deepEqual(forbidden, []);
   });
 });
+
+describe('panier : prix toujours recalculés (constat de revue R1-2)', () => {
+  async function setup() {
+    const core = newCore();
+    const { token } = (await core.handle({ method: 'POST', path: '/auth/login', body: { email: 'demo@roysti.app', password: 'demo1234' } })).body as { token: string };
+    // Article 1688 avec paliers de gros et quantité minimum.
+    const search = (await core.handle({ method: 'GET', path: '/products/search', query: { q: 'sac', platform: '1688' } })).body as { items: { itemId: string }[] };
+    let product: { itemId: string; price: number; moq: number; priceTiers: { minQty: number; price: number }[]; skus: { props: Record<string, string>; stock: number; price: number }[] } | undefined;
+    for (const it of search.items) {
+      const p = (await core.handle({ method: 'GET', path: `/products/1688/${it.itemId}` })).body as NonNullable<typeof product>;
+      if (p.skus.some((s) => s.stock >= p.priceTiers[2]!.minQty)) {
+        product = p;
+        break;
+      }
+    }
+    assert.ok(product, 'article 1688 avec assez de stock');
+    const sku = product.skus.find((s) => s.stock >= product!.priceTiers[2]!.minQty)!;
+    return { core, token, product, sku };
+  }
+
+  it('change de palier quand la quantité change dans le panier', async () => {
+    const { core, token, product, sku } = await setup();
+    const big = product.priceTiers[2]!.minQty;
+    const add = await core.handle({ method: 'POST', path: '/cart', token, body: { platform: '1688', itemId: product.itemId, selection: sku.props, quantity: big } });
+    assert.equal(add.status, 201, JSON.stringify(add.body));
+    const item = add.body as { id: string; unitPrice: number; moq: number };
+    assert.equal(item.moq, product.moq);
+    const bulkPrice = item.unitPrice;
+
+    const patched = await core.handle({ method: 'PATCH', path: `/cart/${item.id}`, token, body: { quantity: product.moq } });
+    assert.equal(patched.status, 200, JSON.stringify(patched.body));
+    const retail = (patched.body as { unitPrice: number }).unitPrice;
+    assert.ok(retail > bulkPrice, `le prix unitaire doit remonter (${bulkPrice} → ${retail})`);
+    // Même règle que le serveur : premier palier appliqué au prix de base, écart propre au SKU conservé.
+    assert.equal(retail, Math.round((sku.price - product.price + product.priceTiers[0]!.price) * 100) / 100);
+  });
+
+  it('refuse une quantité sous le minimum ou au-delà du stock', async () => {
+    const { core, token, product, sku } = await setup();
+    const add = await core.handle({ method: 'POST', path: '/cart', token, body: { platform: '1688', itemId: product.itemId, selection: sku.props, quantity: product.moq } });
+    const { id } = add.body as { id: string };
+    if (product.moq > 1) {
+      const low = await core.handle({ method: 'PATCH', path: `/cart/${id}`, token, body: { quantity: product.moq - 1 } });
+      assert.equal(low.status, 400);
+    }
+    const high = await core.handle({ method: 'PATCH', path: `/cart/${id}`, token, body: { quantity: sku.stock + 1 } });
+    assert.equal(high.status, 400);
+    assert.match((high.body as { error: string }).error, /Stock insuffisant/);
+    // Ajout cumulé au-delà du stock refusé.
+    const merge = await core.handle({ method: 'POST', path: '/cart', token, body: { platform: '1688', itemId: product.itemId, selection: sku.props, quantity: sku.stock } });
+    assert.equal(merge.status, 400);
+  });
+
+  it('recalcule les prix au moment de la commande (prix altéré dans le stockage ignoré)', async () => {
+    const { core, token, product, sku } = await setup();
+    const add = await core.handle({ method: 'POST', path: '/cart', token, body: { platform: '1688', itemId: product.itemId, selection: sku.props, quantity: product.moq } });
+    const { id, unitPrice } = add.body as { id: string; unitPrice: number };
+    core.store.data.cart.find((c) => c.id === id)!.unitPrice = 0.01;
+    const orders = await core.handle({ method: 'POST', path: '/orders/checkout', token, body: { cartItemIds: [id] } });
+    assert.equal(orders.status, 201, JSON.stringify(orders.body));
+    const [order] = orders.body as { items: { unitPrice: number }[] }[];
+    assert.equal(order!.items[0]!.unitPrice, unitPrice);
+  });
+});
+
+describe('notifications bornées', () => {
+  it('ne conserve que les 200 plus récentes par utilisateur', async () => {
+    const core = newCore();
+    const user = core.store.data.users[0]!;
+    for (let i = 0; i < 250; i++) core.accounts.notify(user.id, `n${i}`, 'x');
+    const mine = core.store.data.notifications.filter((n) => n.userId === user.id);
+    assert.equal(mine.length, 200);
+    assert.equal(mine[0]!.title, 'n249');
+  });
+});

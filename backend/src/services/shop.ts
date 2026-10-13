@@ -82,26 +82,37 @@ export class ShopService {
 
   // ---------- Panier ----------
 
-  async addToCart(userId: string, input: AddToCartInput): Promise<CartItem> {
-    const product = await this.provider.getProduct(input.platform, input.itemId);
+  /**
+   * Recharge l'article chez le fournisseur, vérifie options, stock et quantité minimum
+   * pour `quantity`, et renvoie le prix unitaire applicable (paliers de gros compris).
+   * Le prix n'est jamais repris du client ni d'un calcul antérieur.
+   */
+  private async priceFor(platform: Platform, itemId: string, selection: Record<string, string>, quantity: number) {
+    const product = await this.provider.getProduct(platform, itemId);
     if (!product) throw notFound('Article');
-    const sku = findSku(product, input.selection);
+    const sku = findSku(product, selection);
     if (product.props.length && !sku) throw badRequest('Veuillez choisir toutes les options (couleur, taille…)');
     const stock = sku?.stock ?? product.stock;
     if (stock <= 0) throw badRequest('Cette option est en rupture de stock');
-    if (input.quantity > stock) throw badRequest(`Stock insuffisant (${stock} disponibles)`);
-    if (product.moq && input.quantity < product.moq) throw badRequest(`Quantité minimum de commande : ${product.moq}`);
+    if (quantity > stock) throw badRequest(`Stock insuffisant (${stock} disponibles)`);
+    if (product.moq && quantity < product.moq) throw badRequest(`Quantité minimum de commande : ${product.moq}`);
+    return { product, sku, unitPrice: unitPrice(product, sku, quantity) };
+  }
+
+  async addToCart(userId: string, input: AddToCartInput): Promise<CartItem> {
+    const { product, sku, unitPrice: price } = await this.priceFor(input.platform, input.itemId, input.selection, input.quantity);
     const services = servicesById(input.services, 'item').map((s) => s.id);
     const remark = (input.remark ?? '').trim();
 
-    // Le prix est toujours recalculé côté serveur à partir du fournisseur.
-    const price = unitPrice(product, sku, input.quantity);
     const existing = this.data.cart.find(
       (c) => c.userId === userId && c.productId === product.id && (c.skuId ?? '') === (sku?.skuId ?? '') && c.remark === remark,
     );
     if (existing) {
+      // La quantité cumulée est revérifiée (stock) et repricée (palier de gros).
+      const merged = await this.priceFor(existing.platform, existing.itemId, existing.selection, existing.quantity + input.quantity);
       existing.quantity += input.quantity;
-      existing.unitPrice = unitPrice(product, sku, existing.quantity);
+      existing.unitPrice = merged.unitPrice;
+      existing.domesticShipping = merged.product.domesticShipping;
       existing.services = [...new Set([...existing.services, ...services])];
       this.store.save();
       return existing;
@@ -122,6 +133,7 @@ export class ShopService {
       selection: input.selection,
       unitPrice: price,
       quantity: input.quantity,
+      moq: product.moq,
       domesticShipping: product.domesticShipping,
       weightKg: product.weightKg ?? 0.5,
       // Sans dimensions fournies, on suppose un volume proportionnel au poids (5 000 cm³/kg).
@@ -137,12 +149,17 @@ export class ShopService {
     return item;
   }
 
-  updateCartItem(userId: string, id: string, patch: { quantity?: number; remark?: string }) {
+  async updateCartItem(userId: string, id: string, patch: { quantity?: number; remark?: string }) {
     const item = this.data.cart.find((c) => c.id === id && c.userId === userId);
     if (!item) throw notFound('Article du panier');
     if (patch.quantity !== undefined) {
       if (patch.quantity < 1) throw badRequest('Quantité invalide');
+      // Nouveau palier de prix, stock et quantité minimum revérifiés.
+      const priced = await this.priceFor(item.platform, item.itemId, item.selection, patch.quantity);
       item.quantity = patch.quantity;
+      item.unitPrice = priced.unitPrice;
+      item.domesticShipping = priced.product.domesticShipping;
+      item.moq = priced.product.moq;
     }
     if (patch.remark !== undefined) item.remark = patch.remark.trim();
     this.store.save();
@@ -204,9 +221,20 @@ export class ShopService {
 
   // ---------- Commandes ----------
 
-  checkout(userId: string, cartItemIds: string[], couponCode?: string): Order[] {
+  async checkout(userId: string, cartItemIds: string[], couponCode?: string): Promise<Order[]> {
     const items = this.data.cart.filter((c) => c.userId === userId && cartItemIds.includes(c.id));
     if (!items.length) throw badRequest('Aucun article sélectionné');
+    // Prix, port et disponibilité réactualisés au moment de commander.
+    for (const item of items) {
+      try {
+        const priced = await this.priceFor(item.platform, item.itemId, item.selection, item.quantity);
+        item.unitPrice = priced.unitPrice;
+        item.domesticShipping = priced.product.domesticShipping;
+      } catch (err) {
+        if (err instanceof HttpError) throw new HttpError(err.status, `« ${item.title} » : ${err.message}`, err.code);
+        throw err;
+      }
+    }
     const groups = this.groupByShop(items).map((g) => ({ ...g, totals: this.orderTotals(g.platform, g.items) }));
     const grandTotal = groups.reduce((s, g) => s + g.totals.itemsTotal, 0);
     const discount = this.couponDiscount(userId, couponCode, 'order', grandTotal);

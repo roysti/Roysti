@@ -10,6 +10,8 @@ export function publicUser(user: User) {
   return rest;
 }
 
+const MAX_NOTIFICATIONS_PER_USER = 200;
+
 export class AccountService {
   constructor(
     private readonly store: Store,
@@ -112,7 +114,8 @@ export class AccountService {
   }
 
   notify(userId: string, title: string, body: string, link?: string) {
-    this.store.data.notifications.unshift({
+    const list = this.store.data.notifications;
+    list.unshift({
       id: this.store.id(),
       userId,
       title,
@@ -121,6 +124,11 @@ export class AccountService {
       read: false,
       createdAt: new Date().toISOString(),
     });
+    // On ne garde que les plus récentes : la base locale de l'app reste petite (limites d'AsyncStorage).
+    let kept = 0;
+    for (let i = 0; i < list.length; i++) {
+      if (list[i]!.userId === userId && ++kept > MAX_NOTIFICATIONS_PER_USER) list.splice(i--, 1);
+    }
     this.store.save();
   }
 }

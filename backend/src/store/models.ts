@@ -38,6 +38,8 @@ export interface CartItem {
   selection: Record<string, string>;
   unitPrice: number;
   quantity: number;
+  /** Quantité minimum de commande (1688 / Alibaba). */
+  moq?: number;
   domesticShipping: number;
   weightKg: number;
   volumeCm3: number;

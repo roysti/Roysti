@@ -121,6 +121,7 @@ export interface CartItem {
   skuLabel: string;
   unitPrice: number;
   quantity: number;
+  moq?: number;
   domesticShipping: number;
   remark: string;
   services: string[];

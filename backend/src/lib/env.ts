@@ -12,6 +12,9 @@ export function env(name: string): string | undefined {
 /** Équivalent de AbortSignal.timeout(ms), absent de certains moteurs (Hermes). */
 export function timeoutSignal(ms: number): AbortSignal {
   const controller = new AbortController();
-  setTimeout(() => controller.abort(), ms);
+  const timer: unknown = setTimeout(() => controller.abort(), ms);
+  // Sous Node, le minuteur ne doit pas retenir le processus ; sous Hermes, setTimeout renvoie un nombre.
+  const handle = timer as { unref?: () => void };
+  if (typeof timer === 'object' && timer !== null && typeof handle.unref === 'function') handle.unref();
   return controller.signal;
 }

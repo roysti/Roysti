@@ -7,7 +7,7 @@ import { AuthGate } from '@/components/blocks';
 import { Price } from '@/components/Price';
 import { PlatformTag } from '@/components/ProductCard';
 import { ProductImage } from '@/components/ProductImage';
-import { Button, Card, Checkbox, EmptyState, ErrorView, Loading, QuantityStepper } from '@/components/ui';
+import { Button, Card, Checkbox, EmptyState, ErrorView, Loading, Notice, QuantityStepper } from '@/components/ui';
 import { colors, spacing } from '@/constants/theme';
 import { api, errorMessage } from '@/lib/api';
 import { formatCny } from '@/lib/money';
@@ -25,6 +25,7 @@ function Cart() {
   const queryClient = useQueryClient();
   const cart = useQuery({ queryKey: ['cart'], queryFn: () => api<{ groups: CartGroup[]; count: number }>('/cart') });
   const [unselected, setUnselected] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ['cart'] });
@@ -32,9 +33,15 @@ function Cart() {
   };
   const update = useMutation({
     mutationFn: ({ id, quantity }: { id: string; quantity: number }) => api(`/cart/${id}`, { method: 'PATCH', body: { quantity } }),
+    onMutate: () => setError(null),
     onSuccess: refresh,
+    onError: (e) => setError(errorMessage(e)),
   });
-  const remove = useMutation({ mutationFn: (id: string) => api(`/cart/${id}`, { method: 'DELETE' }), onSuccess: refresh });
+  const remove = useMutation({
+    mutationFn: (id: string) => api(`/cart/${id}`, { method: 'DELETE' }),
+    onSuccess: refresh,
+    onError: (e) => setError(errorMessage(e)),
+  });
 
   const groups = cart.data?.groups ?? [];
   const allItems = groups.flatMap((g) => g.items);
@@ -60,6 +67,7 @@ function Cart() {
   return (
     <View style={styles.screen}>
       <ScrollView contentContainerStyle={styles.list} refreshControl={<RefreshControl refreshing={cart.isRefetching} onRefresh={() => cart.refetch()} />}>
+        {error ? <Notice tone="danger">{error}</Notice> : null}
         {groups.map((group) => {
           const ids = group.items.map((i) => i.id);
           const allSelected = ids.every((id) => selectedIds.includes(id));
@@ -88,7 +96,7 @@ function Cart() {
                     {item.remark ? <Text style={styles.remark}>📝 {item.remark}</Text> : null}
                     <View style={styles.itemFooter}>
                       <Price cny={item.unitPrice} size="sm" />
-                      <QuantityStepper value={item.quantity} onChange={(quantity) => update.mutate({ id: item.id, quantity })} />
+                      <QuantityStepper value={item.quantity} min={item.moq ?? 1} onChange={(quantity) => update.mutate({ id: item.id, quantity })} />
                     </View>
                   </View>
                   <Pressable onPress={() => remove.mutate(item.id)} hitSlop={8} accessibilityLabel="Supprimer">

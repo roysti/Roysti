@@ -2,12 +2,15 @@ import assert from 'node:assert/strict';
 import { before, describe, it } from 'node:test';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
+import { randomUUID } from 'node:crypto';
 import { MockProvider } from '../src/providers/mock.js';
+import { Store } from '../src/store/db.js';
 
 process.env.RATES_OFFLINE = 'true';
 
 describe('API – parcours complet', () => {
-  const { app } = createApp({ provider: new MockProvider(), demoMode: true });
+  // Store en mémoire explicite : les tests ne touchent jamais DATA_FILE.
+  const { app } = createApp({ store: new Store({ uuid: randomUUID }), provider: new MockProvider(), demoMode: true });
   let token = '';
   const auth = () => ({ Authorization: `Bearer ${token}` });
 
