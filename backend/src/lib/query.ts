@@ -141,12 +141,14 @@ const STOP_WORDS = new Set(['de', 'du', 'des', 'la', 'le', 'les', 'un', 'une', '
 
 const CJK = /[㐀-鿿]/;
 
+/** Lettres accentuées du français (table explicite : pas de dépendance à String.prototype.normalize). */
+const ACCENTS: Record<string, string> = { à: 'a', â: 'a', ä: 'a', á: 'a', ç: 'c', é: 'e', è: 'e', ê: 'e', ë: 'e', î: 'i', ï: 'i', í: 'i', ô: 'o', ö: 'o', ó: 'o', ù: 'u', û: 'u', ü: 'u', ú: 'u', ÿ: 'y', ñ: 'n', œ: 'oe', æ: 'ae' };
+
 /** Minuscules, sans accents ni ponctuation (« Sac à dos ! » → « sac a dos »). */
 export function foldText(text: string): string {
   return text
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
     .toLowerCase()
+    .replace(/[àâäáçéèêëîïíôöóùûüúÿñœæ]/g, (c) => ACCENTS[c] ?? c)
     .replace(/['’\-_/.,;:!?()]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
