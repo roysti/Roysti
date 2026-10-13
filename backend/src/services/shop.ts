@@ -87,7 +87,12 @@ export class ShopService {
    * pour `quantity`, et renvoie le prix unitaire applicable (paliers de gros compris).
    * Le prix n'est jamais repris du client ni d'un calcul antérieur.
    */
-  private async priceFor(platform: Platform, itemId: string, selection: Record<string, string>, quantity: number) {
+  private async priceFor(platform: Platform, itemId: string, selection: Record<string, string>, quantity: number, origin?: string) {
+    // Un article ajouté depuis une autre source (ex. catalogue de démo avant de brancher une API)
+    // ne doit pas être repricé avec un article réel qui porterait le même identifiant.
+    if (origin !== undefined && origin !== this.provider.name) {
+      throw badRequest('La source des articles a changé depuis l’ajout au panier : retirez cet article puis ajoutez-le à nouveau', 'provider_changed');
+    }
     const product = await this.provider.getProduct(platform, itemId);
     if (!product) throw notFound('Article');
     const sku = findSku(product, selection);
@@ -109,7 +114,7 @@ export class ShopService {
     );
     if (existing) {
       // La quantité cumulée est revérifiée (stock) et repricée (palier de gros).
-      const merged = await this.priceFor(existing.platform, existing.itemId, existing.selection, existing.quantity + input.quantity);
+      const merged = await this.priceFor(existing.platform, existing.itemId, existing.selection, existing.quantity + input.quantity, existing.provider ?? 'mock');
       existing.quantity += input.quantity;
       existing.unitPrice = merged.unitPrice;
       existing.domesticShipping = merged.product.domesticShipping;
@@ -141,6 +146,7 @@ export class ShopService {
       remark,
       services,
       sourceUrl: product.sourceUrl,
+      provider: this.provider.name,
       sensitive: product.sensitive ?? false,
       addedAt: new Date().toISOString(),
     };
@@ -155,7 +161,7 @@ export class ShopService {
     if (patch.quantity !== undefined) {
       if (patch.quantity < 1) throw badRequest('Quantité invalide');
       // Nouveau palier de prix, stock et quantité minimum revérifiés.
-      const priced = await this.priceFor(item.platform, item.itemId, item.selection, patch.quantity);
+      const priced = await this.priceFor(item.platform, item.itemId, item.selection, patch.quantity, item.provider ?? 'mock');
       item.quantity = patch.quantity;
       item.unitPrice = priced.unitPrice;
       item.domesticShipping = priced.product.domesticShipping;
@@ -228,7 +234,7 @@ export class ShopService {
     const snapshot = items.map((item) => ({ item, quantity: item.quantity }));
     for (const item of items) {
       try {
-        const priced = await this.priceFor(item.platform, item.itemId, item.selection, item.quantity);
+        const priced = await this.priceFor(item.platform, item.itemId, item.selection, item.quantity, item.provider ?? 'mock');
         item.unitPrice = priced.unitPrice;
         item.domesticShipping = priced.product.domesticShipping;
       } catch (err) {

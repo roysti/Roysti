@@ -113,6 +113,8 @@ export interface SearchResult {
   hasMore: boolean;
   provider: string;
   isDemoData: boolean;
+  /** Mots-clés réellement envoyés au fournisseur (traduits en chinois). */
+  query?: string;
 }
 
 export interface Category {

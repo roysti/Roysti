@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { COUNTRIES, SHIPPING_LINES, SUPPORTED_CURRENCIES, config } from '../config.js';
 import { CATEGORIES } from '../data/categories.js';
 import { getRates } from '../lib/currency.js';
+import { providerQuery } from '../lib/query.js';
 import { env } from '../lib/env.js';
 import { HttpError, badRequest, notFound } from '../lib/errors.js';
 import { resolveProductLink } from '../lib/linkParser.js';
@@ -234,7 +235,37 @@ const ROUTES: Route[] = [
   {
     method: 'GET',
     path: '/products/search',
-    handler: ({ core, query }) => core.provider.search(parse(searchSchema, query)),
+    handler: async ({ core, query }) => {
+      const params = parse(searchSchema, query);
+      const provider = core.provider;
+      if (provider.isDemo) return provider.search(params);
+      if (params.platform && !provider.platforms.includes(params.platform)) {
+        throw badRequest(`${PLATFORM_LABELS[params.platform]} n’est pas couvert par le fournisseur ${provider.name}`, 'platform_unsupported');
+      }
+      // Les plateformes chinoises cherchent en chinois : on traduit les termes courants.
+      const q = providerQuery(params.q, params.category);
+      const result = await provider.search({ ...params, q, category: undefined });
+      return { ...result, query: q };
+    },
+  },
+  {
+    method: 'GET',
+    path: '/provider/test',
+    handler: async ({ core }) => {
+      const provider = core.provider;
+      if (provider.isDemo) return { ok: true, provider: provider.name, isDemoData: true, message: 'Catalogue de démonstration : aucune clé nécessaire.' };
+      // Un seul appel (facturé) : une petite recherche sur la première plateforme couverte.
+      const platform = provider.platforms[0];
+      const result = await provider.search({ q: '手机壳', platform, page: 1, pageSize: 1, sort: 'default' });
+      const sample = result.items[0];
+      return {
+        ok: true,
+        provider: provider.name,
+        isDemoData: false,
+        message: sample ? `Connexion réussie : ${result.total.toLocaleString('fr-FR')} articles trouvés.` : 'Connexion réussie, mais la recherche de test est vide.',
+        sample: sample ? { title: sample.title, price: sample.price, image: sample.image, platform: sample.platform } : undefined,
+      };
+    },
   },
   {
     method: 'GET',
@@ -243,7 +274,7 @@ const ROUTES: Route[] = [
       const provider = core.provider;
       if (provider instanceof MockProvider) return { items: featuredFrom(provider.all()), provider: provider.name, isDemoData: true };
       // Avec un vrai fournisseur, la page d'accueil affiche une recherche « tendance ».
-      const result = await provider.search({ q: env('FEATURED_QUERY') ?? '热销', page: 1, pageSize: 20, sort: 'sales' });
+      const result = await provider.search({ q: env('FEATURED_QUERY') ?? '热销', platform: provider.platforms[0], page: 1, pageSize: 20, sort: 'sales' });
       return { items: result.items, provider: provider.name, isDemoData: false };
     },
   },

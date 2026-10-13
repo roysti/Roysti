@@ -73,6 +73,8 @@ export interface CartItem {
   sourceUrl: string;
   sensitive: boolean;
   addedAt: string;
+  /** Fournisseur d'où vient l'article (absent = catalogue de démonstration, données anciennes). */
+  provider?: string;
 }
 
 export type OrderStatus =
