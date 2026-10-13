@@ -7,6 +7,8 @@ export function Price({ cny, max, size = 'md', inline }: { cny: number; max?: nu
   const { convert, currency } = useMoney();
   const converted = currency !== 'CNY' ? convert(cny) : null;
   const fontSize = size === 'lg' ? 26 : size === 'md' ? 17 : 14;
+  // Certains fournisseurs ne donnent pas le prix dans les résultats de recherche (0 ou -1).
+  if (!(cny > 0)) return <Text style={[styles.unknown, { fontSize: fontSize * 0.8 }]}>Prix sur la fiche</Text>;
   return (
     <View style={inline ? styles.inline : undefined}>
       <Text style={[styles.cny, { fontSize }]}>
@@ -22,4 +24,5 @@ const styles = StyleSheet.create({
   inline: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
   cny: { color: colors.primary, fontWeight: '800' },
   converted: { color: colors.textSecondary, fontSize: 12, fontWeight: '500' },
+  unknown: { color: colors.textSecondary, fontWeight: '700' },
 });

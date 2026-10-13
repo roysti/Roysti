@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ProviderSettingsCard } from '@/components/ProviderSettingsCard';
 import { Button, Card, Chip, Field, Notice, Row } from '@/components/ui';
 import { colors, spacing } from '@/constants/theme';
 import { apiConfig, defaultApiUrl } from '@/lib/api';
@@ -55,7 +56,7 @@ export default function SettingsScreen() {
         {apiMode === 'local' ? (
           <>
             <Text style={styles.meta}>
-              L’application fonctionne seule, sans serveur, avec le catalogue de démonstration. Votre compte, vos commandes et vos colis sont enregistrés sur ce téléphone.
+              L’application fonctionne seule, sans serveur : votre compte, vos commandes et vos colis sont enregistrés sur ce téléphone. Les articles viennent du catalogue de démonstration ou, avec une clé, d’une vraie API (ci-dessous).
             </Text>
             {resetDone ? <Notice tone="success">Données réinitialisées. Reconnectez-vous avec le compte démo.</Notice> : null}
             <Button
@@ -93,6 +94,8 @@ export default function SettingsScreen() {
           </View>
         ) : null}
       </Card>
+
+      <ProviderSettingsCard />
     </ScrollView>
   );
 }

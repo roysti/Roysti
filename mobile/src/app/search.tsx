@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { Stack, useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { DemoBanner, SearchBar } from '@/components/blocks';
 import { ProductCard } from '@/components/ProductCard';
@@ -36,12 +36,22 @@ export default function SearchScreen() {
       api<SearchResult>('/products/search', {
         query: { q, platform, category, sort, page: pageParam, pageSize: 20, minPrice: Number(minPrice) || undefined, maxPrice: Number(maxPrice) || undefined },
       }),
-    getNextPageParam: (last) => (last.hasMore ? last.page + 1 : undefined),
+    // Chaque page coûte un appel au fournisseur : on s'arrête dès qu'une page n'apporte rien de nouveau.
+    getNextPageParam: (last, pages) => {
+      if (!last.hasMore || !last.items.length) return undefined;
+      const earlier = new Set(pages.slice(0, -1).flatMap((p) => p.items.map((i) => i.id)));
+      return last.items.some((i) => !earlier.has(i.id)) ? last.page + 1 : undefined;
+    },
   });
 
-  const items = query.data?.pages.flatMap((p) => p.items) ?? [];
+  // Les plateformes renvoient parfois le même article sur deux pages : on ne le garde qu'une fois.
+  const items = useMemo(() => {
+    const seen = new Set<string>();
+    return (query.data?.pages.flatMap((p) => p.items) ?? []).filter((i) => !seen.has(i.id) && seen.add(i.id));
+  }, [query.data]);
   const total = query.data?.pages[0]?.total ?? 0;
   const isDemo = query.data?.pages[0]?.isDemoData;
+  const sentQuery = query.data?.pages[0]?.query;
   const categoryName = meta.data?.categories.find((c) => c.id === category)?.name;
 
   return (
@@ -85,7 +95,14 @@ export default function SearchScreen() {
         contentContainerStyle={styles.list}
         onEndReachedThreshold={0.4}
         onEndReached={() => query.hasNextPage && !query.isFetchingNextPage && query.fetchNextPage()}
-        ListHeaderComponent={items.length ? <Text style={styles.count}>{total.toLocaleString('fr-FR')} résultat(s)</Text> : null}
+        ListHeaderComponent={
+          items.length ? (
+            <Text style={styles.count}>
+              {total.toLocaleString('fr-FR')} résultat(s)
+              {sentQuery && !isDemo ? ` · recherché en chinois : ${sentQuery}` : ''}
+            </Text>
+          ) : null
+        }
         ListEmptyComponent={
           query.isLoading ? (
             <Loading label="Recherche sur les plateformes…" />

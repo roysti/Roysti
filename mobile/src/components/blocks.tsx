@@ -116,10 +116,12 @@ export function AuthGate({ children, message }: { children: React.ReactNode; mes
 
 export function DemoBanner() {
   return (
-    <View style={styles.demo}>
+    <Pressable style={styles.demo} onPress={() => router.push('/settings')} accessibilityRole="link">
       <Ionicons name="flask-outline" size={14} color={colors.warning} />
-      <Text style={styles.demoText}>Données de démonstration – branchez un fournisseur d’API pour voir les vrais articles.</Text>
-    </View>
+      <Text style={styles.demoText}>
+        Données de démonstration – <Text style={styles.demoLink}>ajoutez une clé d’API dans les Réglages</Text> pour voir les vrais articles.
+      </Text>
+    </Pressable>
   );
 }
 
@@ -155,4 +157,5 @@ const styles = StyleSheet.create({
   tlDate: { color: colors.textMuted, fontSize: 12 },
   demo: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.warningSoft, paddingHorizontal: spacing.md, paddingVertical: 6 },
   demoText: { flex: 1, color: colors.warning, fontSize: 12, fontWeight: '600' },
+  demoLink: { textDecorationLine: 'underline', fontWeight: '800' },
 });
